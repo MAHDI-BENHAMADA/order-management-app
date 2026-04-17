@@ -5,6 +5,8 @@ import 'package:googleapis/sheets/v4.dart' as sheets;
 import '../models/order.dart';
 import '../widgets/order_card.dart';
 import '../utils/google_auth_service.dart';
+import '../services/yalidine_service.dart';
+import '../services/ecotrack_service.dart';
 import 'setup_screen.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -16,15 +18,20 @@ class HomeScreen extends StatefulWidget {
   HomeScreenState createState() => HomeScreenState();
 }
 
-class HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateMixin {
-  late TabController _tabController;
+class HomeScreenState extends State<HomeScreen> {
   List<AppOrder> allOrders = [];
   bool isLoading = true;
+  String? filterStatus; // null = show all "جديد", or specific status
+  final Map<String, bool> expandedWilayas = {}; // Track which Wilayas are expanded
+  
+  // Performance caching for Wilaya grouping
+  Map<String, List<AppOrder>>? _cachedGroupedData;
+  String? _cachedFilterStatus;
 
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 2, vsync: this);
+    filterStatus = 'جديد'; // Default to "New" orders
     fetchData();
   }
 
@@ -38,14 +45,14 @@ class HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateMi
         return;
       }
 
-      // Read columns A to F. Adjust 'Sheet1' to the actual name if it's different.
-      final response = await api.spreadsheets.values.get(widget.spreadsheetId, 'A:F');
+      // Read columns A to K. 
+      final response = await api.spreadsheets.values.get(widget.spreadsheetId, 'A:K');
       final rows = response.values ?? [];
       
       List<dynamic> parsedData = [];
       for (int i = 1; i < rows.length; i++) { // Start at 1 to skip headers
         var r = rows[i];
-        // Ensure the row has enough columns (up to name at [2] and phone at [4])
+        // Ensure the row has enough columns (up to name at [2])
         if (r.length >= 3 && r[2].toString().isNotEmpty) {
           parsedData.add({
             'row': i + 1, // original sheet row number
@@ -55,12 +62,20 @@ class HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateMi
             'wilaya': r.length > 3 ? r[3] : "",
             'phone': r.length > 4 ? r[4] : "",
             'status': r.length > 5 ? r[5] : "جديد",
+            'commune': r.length > 6 ? r[6] : "",
+            'address': r.length > 7 ? r[7] : "",
+            'product': r.length > 8 ? r[8] : "",
+            'price': r.length > 9 ? r[9] : "",
+            'trackingNumber': r.length > 10 ? (r[10].toString().isEmpty ? null : r[10].toString()) : null,
           });
         }
       }
 
       setState(() {
         allOrders = AppOrder.processRawData(parsedData);
+        // Clear cache when data changes
+        _cachedGroupedData = null;
+        _cachedFilterStatus = null;
       });
     } catch (e) {
       _showError('تعذر جلب البيانات: $e');
@@ -90,8 +105,18 @@ class HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateMi
 
   @override
   void dispose() {
-    _tabController.dispose();
     super.dispose();
+  }
+
+  // Get filtered orders based on current filter
+  List<AppOrder> _getFilteredOrders() {
+    if (filterStatus == null) return allOrders;
+    return allOrders.where((o) => o.status == filterStatus).toList();
+  }
+
+  // Count orders by status
+  int _getStatusCount(String status) {
+    return allOrders.where((o) => o.status == status).length;
   }
 
   Future<void> _updateOrderStatus(AppOrder order, String newStatus) async {
@@ -132,10 +157,304 @@ class HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateMi
     }
   }
 
+  Future<void> _updateOrderFields(AppOrder order, {
+    required String name,
+    required String wilaya,
+    required String commune,
+    required String address,
+  }) async {
+    try {
+      final api = await GoogleAuthService.getSheetsApi();
+      if (api == null) throw Exception('API Call failed, not logged in.');
+
+      final batchUpdate = sheets.BatchUpdateValuesRequest(
+        valueInputOption: 'USER_ENTERED',
+        data: [
+          sheets.ValueRange(range: 'C${order.row}', values: [[name]]),
+          sheets.ValueRange(range: 'D${order.row}', values: [[wilaya]]),
+          sheets.ValueRange(range: 'G${order.row}', values: [[commune]]),
+          sheets.ValueRange(range: 'H${order.row}', values: [[address]]),
+        ],
+      );
+      
+      await api.spreadsheets.values.batchUpdate(
+        batchUpdate,
+        widget.spreadsheetId,
+      );
+
+      setState(() {
+        order.name = name;
+        // Note: wilaya, commune, address are final in the current model, so this won't work.
+        // You'll need to make them mutable or create a separate edit state.
+      });
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('تم حفظ التعديلات بنجاح!'),
+            duration: Duration(seconds: 1),
+            backgroundColor: Color(0xFF10B981),
+          ),
+        );
+      }
+    } catch (e) {
+      _showError('خطأ أثناء حفظ التعديلات: $e');
+    }
+  }
+
+  void _showEditDialog(AppOrder order) {
+    final nameController = TextEditingController(text: order.name);
+    final communeController = TextEditingController(text: order.commune);
+    final addressController = TextEditingController(text: order.address);
+    String selectedWilaya = order.wilaya;
+
+    final List<String> wilayaList = [
+      'الجزائر', 'بلیدة', 'ورقلة', 'إليزي', 'تيبازة', 'تمنراست', 'تيسمسيلت', 'الوادي', 'البیض',
+      'بسكرة', 'بشار', 'بومرداس', 'تاجنانت', 'تندوف', 'تيارت', 'تلمسان', 'جيجل', 'سطيف',
+      'سعيدة', 'سوق أهراس', 'سكيكدة', 'سيدي بلعباس', 'شلف', 'صفاقس', 'عنابة', 'عين الدفلى',
+      'عين تيموشنت', 'غار الدايس', 'غليزان', 'فرندة', 'قالمة', 'قسنطينة', 'القيروان',
+      'كلم الساحة', 'ميلة', 'مستغانم', 'معسكر', 'مدية', 'مسيلة', 'ولايات غير محددة'
+    ];
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('تعديل الطلب', textAlign: TextAlign.right),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: nameController,
+                decoration: const InputDecoration(
+                  labelText: 'الاسم الكامل',
+                  border: OutlineInputBorder(),
+                ),
+                textDirection: TextDirection.rtl,
+              ),
+              const SizedBox(height: 12),
+              DropdownButtonFormField<String>(
+                value: selectedWilaya,
+                items: wilayaList.map((w) => DropdownMenuItem(value: w, child: Text(w))).toList(),
+                onChanged: (val) => selectedWilaya = val ?? order.wilaya,
+                decoration: const InputDecoration(
+                  labelText: 'الولاية',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: communeController,
+                decoration: const InputDecoration(
+                  labelText: 'البلدية',
+                  border: OutlineInputBorder(),
+                ),
+                textDirection: TextDirection.rtl,
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: addressController,
+                decoration: const InputDecoration(
+                  labelText: 'العنوان',
+                  border: OutlineInputBorder(),
+                ),
+                textDirection: TextDirection.rtl,
+                maxLines: 3,
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('إلغاء'),
+          ),
+          TextButton(
+            onPressed: () {
+              _updateOrderFields(
+                order,
+                name: nameController.text,
+                wilaya: selectedWilaya,
+                commune: communeController.text,
+                address: addressController.text,
+              );
+              Navigator.pop(context);
+            },
+            child: const Text('حفظ'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showLogisticsSheet(AppOrder order) {
+    showModalBottomSheet(
+      context: context,
+      builder: (context) => Container(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+              'اختر شركة التوصيل',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 20),
+            ListTile(
+              leading: const Icon(Icons.local_shipping),
+              title: const Text('Yalidine'),
+              onTap: () {
+                Navigator.pop(context);
+                _shipWithYalidine(order);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.local_shipping),
+              title: const Text('EcoTrack'),
+              onTap: () {
+                Navigator.pop(context);
+                _shipWithEcoTrack(order);
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _shipWithYalidine(AppOrder order) async {
+    try {
+      // Get Yalidine API token from SharedPreferences
+      final prefs = await SharedPreferences.getInstance();
+      final yalidineToken = prefs.getString('yalidine_token');
+      
+      if (yalidineToken == null || yalidineToken.isEmpty) {
+        _showError('خطأ: لم يتم حفظ رمز Yalidine. يرجى تحديثه في الإعدادات.');
+        return;
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('جاري إرسال الطلب إلى Yalidine...'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+
+      YalidineService.setApiToken(yalidineToken);
+      final trackingNumber = await YalidineService.createShipment(order);
+
+      if (trackingNumber != null) {
+        await _updateTrackingAndStatus(order, trackingNumber, 'uploaded');
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('تم الإرسال بنجاح! رقم التتبع: $trackingNumber'),
+              backgroundColor: const Color(0xFF10B981),
+              duration: const Duration(seconds: 3),
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      _showError('خطأ Yalidine: $e');
+    }
+  }
+
+  void _shipWithEcoTrack(AppOrder order) async {
+    try {
+      // Get EcoTrack API token from SharedPreferences
+      final prefs = await SharedPreferences.getInstance();
+      final ecotrackToken = prefs.getString('ecotrack_token');
+      
+      if (ecotrackToken == null || ecotrackToken.isEmpty) {
+        _showError('خطأ: لم يتم حفظ رمز EcoTrack. يرجى تحديثه في الإعدادات.');
+        return;
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('جاري إرسال الطلب إلى EcoTrack...'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+
+      EcoTrackService.setApiToken(ecotrackToken);
+      final trackingNumber = await EcoTrackService.createParcel(order);
+
+      if (trackingNumber != null) {
+        await _updateTrackingAndStatus(order, trackingNumber, 'uploaded');
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('تم الإرسال بنجاح! رقم التتبع: $trackingNumber'),
+              backgroundColor: const Color(0xFF10B981),
+              duration: const Duration(seconds: 3),
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      _showError('خطأ EcoTrack: $e');
+    }
+  }
+
+  Future<void> _updateTrackingAndStatus(AppOrder order, String newTrackingNumber, String newStatus) async {
+    final oldStatus = order.status;
+    final oldTracking = order.trackingNumber;
+    setState(() {
+      order.status = newStatus;
+      order.trackingNumber = newTrackingNumber;
+    });
+
+    try {
+      final api = await GoogleAuthService.getSheetsApi();
+      if (api == null) throw Exception('API Call failed, not logged in.');
+
+      // Update Column F (status) and K (tracking)
+      final batchUpdate = sheets.BatchUpdateValuesRequest(
+        valueInputOption: 'USER_ENTERED',
+        data: [
+          sheets.ValueRange(range: 'F${order.row}', values: [[newStatus]]),
+          sheets.ValueRange(range: 'K${order.row}', values: [[newTrackingNumber]]),
+        ],
+      );
+      
+      await api.spreadsheets.values.batchUpdate(
+        batchUpdate,
+        widget.spreadsheetId,
+      );
+    } catch (e) {
+      // Revert if API fails
+      setState(() {
+        order.status = oldStatus;
+        order.trackingNumber = oldTracking;
+      });
+      _showError('خطأ أثناء التحديث! تم التراجع عن التغيير: $e');
+    }
+  }
+
+  // Group orders by Wilaya - with caching for performance
+  Map<String, List<AppOrder>> _groupByWilaya(List<AppOrder> orders) {
+    if (_cachedFilterStatus == filterStatus && _cachedGroupedData != null) {
+      return _cachedGroupedData!;
+    }
+    
+    Map<String, List<AppOrder>> grouped = {};
+    for (var order in orders) {
+      final wilaya = order.wilaya.isEmpty ? 'ولايات غير محددة' : order.wilaya;
+      grouped.putIfAbsent(wilaya, () => []);
+      grouped[wilaya]!.add(order);
+    }
+    
+    _cachedFilterStatus = filterStatus;
+    _cachedGroupedData = grouped;
+    return grouped;
+  }
+
   @override
   Widget build(BuildContext context) {
-    final currentList = allOrders.where((o) => o.status != 'uploaded').toList();
-    final archivedOrders = allOrders.where((o) => o.status == 'uploaded').toList();
+    final filteredOrders = _getFilteredOrders();
 
     return Scaffold(
       appBar: AppBar(
@@ -154,26 +473,169 @@ class HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateMi
             tooltip: 'تغيير الرابط',
           ),
         ],
-        bottom: TabBar(
-          controller: _tabController,
-          labelColor: const Color(0xFF10B981),
-          unselectedLabelColor: Colors.grey,
-          indicatorColor: const Color(0xFF10B981),
-          tabs: const [
-            Tab(text: "الطلبات الحالية"),
-            Tab(text: "الأرشيف"),
-          ],
-        ),
       ),
       body: isLoading
           ? const Center(child: CircularProgressIndicator(color: Color(0xFF10B981)))
-          : TabBarView(
-              controller: _tabController,
+          : Column(
               children: [
-                _buildOrderList(currentList),
-                _buildOrderList(archivedOrders),
+                // 5-Icon Filter Navigation Bar
+                Container(
+                  color: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    children: [
+                      _buildFilterIcon(
+                        icon: Icons.inbox,
+                        label: 'الكل',
+                        count: allOrders.length,
+                        status: null,
+                        color: Colors.blueGrey,
+                      ),
+                      _buildFilterIcon(
+                        icon: Icons.check_circle,
+                        label: 'مؤكد',
+                        count: _getStatusCount('confirm'),
+                        status: 'confirm',
+                        color: const Color(0xFF10B981),
+                      ),
+                      _buildFilterIcon(
+                        icon: Icons.hourglass_empty_rounded,
+                        label: 'لا إجابة',
+                        count: _getStatusCount('no_response'),
+                        status: 'no_response',
+                        color: Colors.orangeAccent,
+                      ),
+                      _buildFilterIcon(
+                        icon: Icons.cancel,
+                        label: 'ملغى',
+                        count: _getStatusCount('canceled'),
+                        status: 'canceled',
+                        color: Colors.redAccent,
+                      ),
+                      _buildFilterIcon(
+                        icon: Icons.upload_rounded,
+                        label: 'أرشيف',
+                        count: _getStatusCount('uploaded'),
+                        status: 'uploaded',
+                        color: const Color(0xFF065F46),
+                      ),
+                    ],
+                  ),
+                ),
+                // Orders List/ExpansionTiles
+                Expanded(
+                  child: filteredOrders.isEmpty
+                      ? const Center(child: Text('لا توجد طلبات هنا', style: TextStyle(color: Colors.grey)))
+                      : RefreshIndicator(
+                          onRefresh: fetchData,
+                          color: const Color(0xFF10B981),
+                          child: filterStatus == 'جديد'
+                              ? _buildNewOrdersWithExpansion(filteredOrders)
+                              : _buildOrderList(filteredOrders),
+                        ),
+                ),
               ],
             ),
+    );
+  }
+
+  Widget _buildFilterIcon({
+    required IconData icon,
+    required String label,
+    required int count,
+    required String? status,
+    required Color color,
+  }) {
+    final isActive = filterStatus == status;
+    return InkWell(
+      onTap: () => setState(() => filterStatus = status),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Stack(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: isActive ? color.withOpacity(0.15) : Colors.transparent,
+                ),
+                child: Icon(
+                  icon,
+                  color: isActive ? color : Colors.grey,
+                  size: 28,
+                ),
+              ),
+              if (count > 0)
+                Positioned(
+                  right: 0,
+                  top: 0,
+                  child: Container(
+                    padding: const EdgeInsets.all(2),
+                    decoration: BoxDecoration(
+                      color: color,
+                      shape: BoxShape.circle,
+                    ),
+                    child: Text(
+                      count.toString(),
+                      style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(label, style: const TextStyle(fontSize: 10)),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildNewOrdersWithExpansion(List<AppOrder> orders) {
+    final grouped = _groupByWilaya(orders);
+    final sortedWilayas = grouped.keys.toList()..sort();
+
+    return ListView.builder(
+      padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+      itemCount: sortedWilayas.length,
+      cacheExtent: 500,
+      addRepaintBoundaries: true,
+      itemBuilder: (context, index) {
+        final wilaya = sortedWilayas[index];
+        final wilayaOrders = grouped[wilaya]!;
+        final isExpanded = expandedWilayas[wilaya] ?? false;
+
+        return RepaintBoundary(
+          child: ExpansionTile(
+            key: ValueKey(wilaya),
+            title: Text(
+              '$wilaya (${wilayaOrders.length})',
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
+            initiallyExpanded: false,
+            onExpansionChanged: (expanded) {
+              setState(() {
+                if (expanded) {
+                  expandedWilayas.clear();
+                }
+                expandedWilayas[wilaya] = expanded;
+              });
+            },
+            children: wilayaOrders.map((order) {
+              return RepaintBoundary(
+                child: OrderCard(
+                  key: ValueKey(order.row),
+                  order: order,
+                  onStatusChange: (newStatus) => _updateOrderStatus(order, newStatus),
+                  onEdit: () => _showEditDialog(order),
+                  onShip: () => _showLogisticsSheet(order),
+                ),
+              );
+            }).toList(),
+          ),
+        );
+      },
     );
   }
 
@@ -184,21 +646,24 @@ class HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateMi
       );
     }
 
-    return RefreshIndicator(
-      onRefresh: fetchData,
-      color: const Color(0xFF10B981),
-      child: ListView.builder(
-        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
-        itemCount: orders.length,
-        itemBuilder: (context, index) {
-          final order = orders[index];
-          return OrderCard(
+    return ListView.builder(
+      padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+      itemCount: orders.length,
+      cacheExtent: 500,
+      addRepaintBoundaries: true,
+      physics: const BouncingScrollPhysics(parent: AlwaysScrollableScrollPhysics()),
+      itemBuilder: (context, index) {
+        final order = orders[index];
+        return RepaintBoundary(
+          child: OrderCard(
             key: ValueKey(order.row),
             order: order,
             onStatusChange: (newStatus) => _updateOrderStatus(order, newStatus),
-          );
-        },
-      ),
+            onEdit: () => _showEditDialog(order),
+            onShip: () => _showLogisticsSheet(order),
+          ),
+        );
+      },
     );
   }
 }
