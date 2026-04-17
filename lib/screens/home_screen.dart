@@ -23,6 +23,10 @@ class HomeScreenState extends State<HomeScreen> {
   bool isLoading = true;
   String? filterStatus; // null = show all "جديد", or specific status
   final Map<String, bool> expandedWilayas = {}; // Track which Wilayas are expanded
+  
+  // Performance caching for Wilaya grouping
+  Map<String, List<AppOrder>>? _cachedGroupedData;
+  String? _cachedFilterStatus;
 
   @override
   void initState() {
@@ -69,6 +73,9 @@ class HomeScreenState extends State<HomeScreen> {
 
       setState(() {
         allOrders = AppOrder.processRawData(parsedData);
+        // Clear cache when data changes
+        _cachedGroupedData = null;
+        _cachedFilterStatus = null;
       });
     } catch (e) {
       _showError('تعذر جلب البيانات: $e');
@@ -427,14 +434,21 @@ class HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  // Group orders by Wilaya for the "New" filter
+  // Group orders by Wilaya - with caching for performance
   Map<String, List<AppOrder>> _groupByWilaya(List<AppOrder> orders) {
+    if (_cachedFilterStatus == filterStatus && _cachedGroupedData != null) {
+      return _cachedGroupedData!;
+    }
+    
     Map<String, List<AppOrder>> grouped = {};
     for (var order in orders) {
       final wilaya = order.wilaya.isEmpty ? 'ولايات غير محددة' : order.wilaya;
       grouped.putIfAbsent(wilaya, () => []);
       grouped[wilaya]!.add(order);
     }
+    
+    _cachedFilterStatus = filterStatus;
+    _cachedGroupedData = grouped;
     return grouped;
   }
 
@@ -585,36 +599,41 @@ class HomeScreenState extends State<HomeScreen> {
     return ListView.builder(
       padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
       itemCount: sortedWilayas.length,
+      cacheExtent: 500,
+      addRepaintBoundaries: true,
       itemBuilder: (context, index) {
         final wilaya = sortedWilayas[index];
         final wilayaOrders = grouped[wilaya]!;
         final isExpanded = expandedWilayas[wilaya] ?? false;
 
-        return ExpansionTile(
-          key: ValueKey(wilaya),
-          title: Text(
-            '$wilaya (${wilayaOrders.length})',
-            style: const TextStyle(fontWeight: FontWeight.bold),
+        return RepaintBoundary(
+          child: ExpansionTile(
+            key: ValueKey(wilaya),
+            title: Text(
+              '$wilaya (${wilayaOrders.length})',
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
+            initiallyExpanded: false,
+            onExpansionChanged: (expanded) {
+              setState(() {
+                if (expanded) {
+                  expandedWilayas.clear();
+                }
+                expandedWilayas[wilaya] = expanded;
+              });
+            },
+            children: wilayaOrders.map((order) {
+              return RepaintBoundary(
+                child: OrderCard(
+                  key: ValueKey(order.row),
+                  order: order,
+                  onStatusChange: (newStatus) => _updateOrderStatus(order, newStatus),
+                  onEdit: () => _showEditDialog(order),
+                  onShip: () => _showLogisticsSheet(order),
+                ),
+              );
+            }).toList(),
           ),
-          initiallyExpanded: false,
-          onExpansionChanged: (expanded) {
-            setState(() {
-              if (expanded) {
-                // Collapse all others (accordion behavior)
-                expandedWilayas.clear();
-              }
-              expandedWilayas[wilaya] = expanded;
-            });
-          },
-          children: wilayaOrders.map((order) {
-            return OrderCard(
-              key: ValueKey(order.row),
-              order: order,
-              onStatusChange: (newStatus) => _updateOrderStatus(order, newStatus),
-              onEdit: () => _showEditDialog(order),
-              onShip: () => _showLogisticsSheet(order),
-            );
-          }).toList(),
         );
       },
     );
@@ -630,14 +649,19 @@ class HomeScreenState extends State<HomeScreen> {
     return ListView.builder(
       padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
       itemCount: orders.length,
+      cacheExtent: 500,
+      addRepaintBoundaries: true,
+      physics: const BouncingScrollPhysics(parent: AlwaysScrollableScrollPhysics()),
       itemBuilder: (context, index) {
         final order = orders[index];
-        return OrderCard(
-          key: ValueKey(order.row),
-          order: order,
-          onStatusChange: (newStatus) => _updateOrderStatus(order, newStatus),
-          onEdit: () => _showEditDialog(order),
-          onShip: () => _showLogisticsSheet(order),
+        return RepaintBoundary(
+          child: OrderCard(
+            key: ValueKey(order.row),
+            order: order,
+            onStatusChange: (newStatus) => _updateOrderStatus(order, newStatus),
+            onEdit: () => _showEditDialog(order),
+            onShip: () => _showLogisticsSheet(order),
+          ),
         );
       },
     );

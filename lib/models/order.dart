@@ -72,8 +72,8 @@ class AppOrder {
     }
 
     List<AppOrder> processedList = uniqueOrders.values.toList();
-    // Sort descending by row (newest first)
-    processedList.sort((a, b) => b.row.compareTo(a.row));
+    // Sort descending by row (newest first) - faster than compareTo
+    processedList.sort((a, b) => b.row - a.row);
     return processedList;
   }
 }
