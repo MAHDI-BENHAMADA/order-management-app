@@ -1,17 +1,55 @@
-# order_app
+# Order Tracking Dashboard
 
-A new Flutter project.
+A mobile-first Flutter app for sellers to manage and track orders directly from Google Sheets.
 
-## Getting Started
+## Features
 
-This project is a starting point for a Flutter application.
+- ✅ Google Sign-In authentication
+- 📊 Real-time order tracking from Google Sheets
+- 🇸🇦 Arabic RTL interface
+- 📞 One-tap phone dialer integration
+- 📋 Current Orders & Archive tabs
+- 🔄 Live status updates (confirm, canceled, no_response, uploaded)
 
-A few resources to get you started if this is your first Flutter project:
+## Prerequisites
 
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
+- Flutter SDK (^3.11.4)
+- Google Firebase project with Google Sheets API enabled
+- Android device/emulator
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+## Setup
+
+### 1. Firebase & Google Cloud Setup
+1. Create a Firebase project at [console.firebase.google.com](https://console.firebase.google.com)
+2. Add an Android app and download `google-services.json`
+3. Place `google-services.json` in `android/app/`
+4. Enable Google Sheets API: https://console.developers.google.com/apis/api/sheets.googleapis.com/overview
+5. Get your debug SHA-1 key: `cd android && ./gradlew signingReport`
+6. Add the SHA-1 fingerprint to Firebase Console > Project Settings > Android app
+7. Add your test email to OAuth consent screen > Test users
+
+### 2. Install Dependencies
+```bash
+flutter pub get
+```
+
+### 3. Run the App
+```bash
+flutter run
+```
+
+## How to Use
+
+1. **Sign In:** Click "Sign in with Google" and authenticate
+2. **Add Sheet:** Paste your Google Sheet URL (app auto-extracts the Sheet ID)
+3. **Track Orders:** View current orders or archived orders
+4. **Update Status:** Tap status buttons to change order status in real-time
+5. **Call:** Tap the phone icon to dial the customer
+
+## Tech Stack
+
+- **Framework:** Flutter (Dart)
+- **Backend:** Google Sheets API v4
+- **Auth:** Google Sign-In
+- **Storage:** Shared Preferences
+- **UI:** Material Design with Arabic localization
