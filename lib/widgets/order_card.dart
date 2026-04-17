@@ -51,8 +51,8 @@ class OrderCard extends StatelessWidget {
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      elevation: 2,
-      shadowColor: Colors.black12,
+      elevation: 1,
+      shadowColor: Colors.black.withOpacity(0.08),
       child: Padding(
         padding: const EdgeInsets.all(12.0),
         child: Column(
@@ -147,20 +147,22 @@ class OrderCard extends StatelessWidget {
     required bool isActive,
     required VoidCallback onTap,
   }) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(50),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
-        padding: const EdgeInsets.all(8),
-        decoration: BoxDecoration(
-          color: isActive ? color.withOpacity(0.15) : Colors.transparent,
-          shape: BoxShape.circle,
-        ),
-        child: Icon(
-          icon,
-          color: isActive ? color : Colors.grey.shade400,
-          size: 28,
+    return RepaintBoundary(
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(50),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 150),
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: isActive ? color.withOpacity(0.15) : Colors.transparent,
+            shape: BoxShape.circle,
+          ),
+          child: Icon(
+            icon,
+            color: isActive ? color : Colors.grey.shade400,
+            size: 28,
+          ),
         ),
       ),
     );
