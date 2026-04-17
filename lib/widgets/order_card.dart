@@ -6,14 +6,29 @@ import '../models/order.dart';
 class OrderCard extends StatelessWidget {
   final AppOrder order;
   final Function(String) onStatusChange;
+  final VoidCallback onEdit;
+  final VoidCallback? onShip;
 
   const OrderCard({
     Key? key,
     required this.order,
     required this.onStatusChange,
+    required this.onEdit,
+    this.onShip,
   }) : super(key: key);
 
   Future<void> _callPhone(BuildContext context) async {
+    // Copy phone number to clipboard
+    await Clipboard.setData(ClipboardData(text: order.phone));
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('تم نسخ رقم الهاتف بنجاح!', textAlign: TextAlign.right),
+          duration: Duration(seconds: 1),
+        ),
+      );
+    }
+    
     final Uri url = Uri.parse('tel:${order.phone}');
     if (await canLaunchUrl(url)) {
       await launchUrl(url);
@@ -70,9 +85,14 @@ class OrderCard extends StatelessWidget {
                   ),
                 ),
                 IconButton(
+                  onPressed: onEdit,
+                  icon: const Icon(Icons.edit, color: Colors.blueGrey),
+                  tooltip: 'تعديل',
+                ),
+                IconButton(
                   onPressed: () => _callPhone(context),
                   icon: const Icon(Icons.phone, color: Color(0xFF10B981)),
-                  tooltip: 'اتصال',
+                  tooltip: 'اتصال ونسخ',
                 ),
               ],
             ),
@@ -100,6 +120,13 @@ class OrderCard extends StatelessWidget {
                   isActive: order.status == 'no_response',
                   onTap: () => onStatusChange('no_response'),
                 ),
+                if (order.status == 'confirm' && onShip != null)
+                  _buildStatusIcon(
+                    icon: Icons.local_shipping,
+                    color: const Color(0xFF0066cc), // Blue 🚚
+                    isActive: false,
+                    onTap: onShip!,
+                  ),
                 _buildStatusIcon(
                   icon: Icons.upload_rounded,
                   color: const Color(0xFF065F46), // Dark Emerald green 📤
