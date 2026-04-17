@@ -2,9 +2,14 @@ class AppOrder {
   final int row;
   final String date;
   final String time;
-  final String name;
-  final String wilaya;
+  String name;
+  String wilaya;
   final String phone;
+  String commune;
+  String address;
+  final String product;
+  final String price;
+  String? trackingNumber;
   String status; // Mutable for local state changes
 
   AppOrder({
@@ -14,6 +19,11 @@ class AppOrder {
     required this.name,
     required this.wilaya,
     required this.phone,
+    this.commune = '',
+    this.address = '',
+    this.product = '',
+    this.price = '',
+    this.trackingNumber,
     required this.status,
   });
 
@@ -25,9 +35,19 @@ class AppOrder {
       name: json['name'].toString(),
       wilaya: json['wilaya'].toString(),
       phone: json['phone'].toString(),
+      commune: json['commune']?.toString() ?? '',
+      address: json['address']?.toString() ?? '',
+      product: json['product']?.toString() ?? '',
+      price: json['price']?.toString() ?? '',
+      trackingNumber: json['trackingNumber']?.toString(),
       status: json['status'].toString(),
     );
   }
+
+  int get completionScore =>
+      (name.isNotEmpty ? 1 : 0) +
+      (phone.isNotEmpty ? 1 : 0) +
+      (wilaya.isNotEmpty ? 1 : 0);
 
   // Deduplication and sorting logic
   static List<AppOrder> processRawData(List<dynamic> rawData) {
@@ -35,10 +55,19 @@ class AppOrder {
 
     for (var item in rawData) {
       final order = AppOrder.fromJson(item as Map<String, dynamic>);
-      // Keep only highest row value for duplicate phones
-      if (!uniqueOrders.containsKey(order.phone) || 
-          uniqueOrders[order.phone]!.row < order.row) {
+      
+      if (!uniqueOrders.containsKey(order.phone)) {
         uniqueOrders[order.phone] = order;
+      } else {
+        final existingOrder = uniqueOrders[order.phone]!;
+        // Priority 1: The row with the most completed fields (Name + Phone + Wilaya).
+        if (order.completionScore > existingOrder.completionScore) {
+          uniqueOrders[order.phone] = order;
+        } 
+        // Priority 2: If data is equal, pick the newest entry (highest row index).
+        else if (order.completionScore == existingOrder.completionScore && order.row > existingOrder.row) {
+          uniqueOrders[order.phone] = order;
+        }
       }
     }
 

@@ -22,7 +22,16 @@ class GoogleAuthService {
   }
 
   static Future<sheets.SheetsApi?> getSheetsApi() async {
-    final account = _googleSignIn.currentUser;
+    // Try to get current user, or attempt a silent sign-in if returning to the app
+    GoogleSignInAccount? account = _googleSignIn.currentUser;
+    if (account == null) {
+      try {
+        account = await _googleSignIn.signInSilently();
+      } catch (e) {
+        return null;
+      }
+    }
+    
     if (account == null) return null;
 
     final authHeaders = await account.authHeaders;

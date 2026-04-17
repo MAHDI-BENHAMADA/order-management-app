@@ -13,6 +13,8 @@ class SetupScreen extends StatefulWidget {
 
 class _SetupScreenState extends State<SetupScreen> {
   final TextEditingController _urlController = TextEditingController();
+  final TextEditingController _yalidineController = TextEditingController();
+  final TextEditingController _ecotrackController = TextEditingController();
   bool _isLoading = false;
   GoogleSignInAccount? _user;
 
@@ -63,6 +65,15 @@ class _SetupScreenState extends State<SetupScreen> {
     setState(() => _isLoading = true);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('spreadsheetId', sheetId);
+    
+    // Save logistics tokens if provided
+    if (_yalidineController.text.trim().isNotEmpty) {
+      await prefs.setString('yalidine_token', _yalidineController.text.trim());
+    }
+    if (_ecotrackController.text.trim().isNotEmpty) {
+      await prefs.setString('ecotrack_token', _ecotrackController.text.trim());
+    }
+    
     setState(() => _isLoading = false);
 
     if (mounted) {
@@ -71,6 +82,14 @@ class _SetupScreenState extends State<SetupScreen> {
         MaterialPageRoute(builder: (context) => HomeScreen(spreadsheetId: sheetId)),
       );
     }
+  }
+
+  @override
+  void dispose() {
+    _urlController.dispose();
+    _yalidineController.dispose();
+    _ecotrackController.dispose();
+    super.dispose();
   }
 
   @override
@@ -141,6 +160,44 @@ class _SetupScreenState extends State<SetupScreen> {
                   ),
                   keyboardType: TextInputType.url,
                   textDirection: TextDirection.ltr,
+                ),
+                const SizedBox(height: 16),
+                const Text(
+                  'خيارات التسليم (اختياري)',
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.black54),
+                  textAlign: TextAlign.right,
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _yalidineController,
+                  decoration: InputDecoration(
+                    labelText: 'رمز Yalidine API (اختياري)',
+                    labelStyle: const TextStyle(color: Colors.grey),
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                    focusedBorder: OutlineInputBorder(
+                      borderSide: const BorderSide(color: Color(0xFF10B981), width: 2),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    filled: true,
+                    fillColor: Colors.grey.shade50,
+                  ),
+                  obscureText: true,
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _ecotrackController,
+                  decoration: InputDecoration(
+                    labelText: 'رمز EcoTrack API (اختياري)',
+                    labelStyle: const TextStyle(color: Colors.grey),
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                    focusedBorder: OutlineInputBorder(
+                      borderSide: const BorderSide(color: Color(0xFF10B981), width: 2),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    filled: true,
+                    fillColor: Colors.grey.shade50,
+                  ),
+                  obscureText: true,
                 ),
                 const SizedBox(height: 24),
                 SizedBox(
