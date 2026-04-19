@@ -187,13 +187,16 @@ class HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateMi
     return RefreshIndicator(
       onRefresh: fetchData,
       color: const Color(0xFF10B981),
-      child: ListView.builder(
+      // Using ListView.separated for clean divider handling instead of manual margins
+      // This separates concerns: items are separate from spacing logic
+      child: ListView.separated(
         padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
         itemCount: orders.length,
+        separatorBuilder: (context, index) => const SizedBox(height: 8),
         itemBuilder: (context, index) {
           final order = orders[index];
           return OrderCard(
-            key: ValueKey(order.row),
+            key: ValueKey(order.row), // Unique key preserves widget state during reordering
             order: order,
             onStatusChange: (newStatus) => _updateOrderStatus(order, newStatus),
           );

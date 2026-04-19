@@ -3,6 +3,65 @@ import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../models/order.dart';
 
+// Extracted const text styles for memory efficiency
+const _nameStyle = TextStyle(
+  fontSize: 18,
+  fontWeight: FontWeight.bold,
+  color: Colors.black87,
+);
+
+const _wilayaStyle = TextStyle(
+  fontSize: 14,
+  color: Colors.grey,
+);
+
+const _divider = Divider(
+  height: 24,
+  thickness: 1,
+  color: Color(0xFFEEEEEE),
+);
+
+const _phoneIcon = Icon(
+  Icons.phone,
+  color: Color(0xFF10B981),
+);
+
+// Const status icon button widget - prevents unnecessary rebuilds
+class _StatusIconButton extends StatelessWidget {
+  final IconData icon;
+  final Color color;
+  final bool isActive;
+  final VoidCallback onTap;
+
+  const _StatusIconButton({
+    required this.icon,
+    required this.color,
+    required this.isActive,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(50),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        padding: const EdgeInsets.all(8),
+        decoration: BoxDecoration(
+          color: isActive ? color.withOpacity(0.15) : Colors.transparent,
+          shape: BoxShape.circle,
+        ),
+        child: Icon(
+          icon,
+          color: isActive ? color : Colors.grey.shade400,
+          size: 28,
+        ),
+      ),
+    );
+  }
+}
+
 class OrderCard extends StatelessWidget {
   final AppOrder order;
   final Function(String) onStatusChange;
@@ -34,7 +93,6 @@ class OrderCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Card(
-      margin: const EdgeInsets.only(bottom: 12),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       elevation: 2,
       shadowColor: Colors.black12,
@@ -52,88 +110,55 @@ class OrderCard extends StatelessWidget {
                     children: [
                       Text(
                         order.name,
-                        style: const TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.black87,
-                        ),
+                        style: _nameStyle,
                       ),
                       const SizedBox(height: 4),
                       Text(
                         order.wilaya,
-                        style: const TextStyle(
-                          fontSize: 14,
-                          color: Colors.grey,
-                        ),
+                        style: _wilayaStyle,
                       ),
                     ],
                   ),
                 ),
                 IconButton(
                   onPressed: () => _callPhone(context),
-                  icon: const Icon(Icons.phone, color: Color(0xFF10B981)),
+                  icon: _phoneIcon,
                   tooltip: 'اتصال',
                 ),
               ],
             ),
-            const Divider(height: 24, thickness: 1, color: Color(0xFFEEEEEE)),
-            
+            _divider,
             // Bottom Row: Status Actions
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceEvenly,
               children: [
-                _buildStatusIcon(
+                _StatusIconButton(
                   icon: Icons.check_circle,
-                  color: const Color(0xFF10B981), // Green ✅
+                  color: const Color(0xFF10B981),
                   isActive: order.status == 'confirm',
                   onTap: () => onStatusChange('confirm'),
                 ),
-                _buildStatusIcon(
+                _StatusIconButton(
                   icon: Icons.cancel,
-                  color: Colors.redAccent, // Red ❌
+                  color: Colors.redAccent,
                   isActive: order.status == 'canceled',
                   onTap: () => onStatusChange('canceled'),
                 ),
-                _buildStatusIcon(
+                _StatusIconButton(
                   icon: Icons.hourglass_empty_rounded,
-                  color: Colors.orangeAccent, // Yellow ⏳
+                  color: Colors.orangeAccent,
                   isActive: order.status == 'no_response',
                   onTap: () => onStatusChange('no_response'),
                 ),
-                _buildStatusIcon(
+                _StatusIconButton(
                   icon: Icons.upload_rounded,
-                  color: const Color(0xFF065F46), // Dark Emerald green 📤
+                  color: const Color(0xFF065F46),
                   isActive: order.status == 'uploaded',
-                  onTap: () => onStatusChange('uploaded'), // Triggers move to archive
+                  onTap: () => onStatusChange('uploaded'),
                 ),
               ],
             ),
           ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildStatusIcon({
-    required IconData icon,
-    required Color color,
-    required bool isActive,
-    required VoidCallback onTap,
-  }) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(50),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
-        padding: const EdgeInsets.all(8),
-        decoration: BoxDecoration(
-          color: isActive ? color.withOpacity(0.15) : Colors.transparent,
-          shape: BoxShape.circle,
-        ),
-        child: Icon(
-          icon,
-          color: isActive ? color : Colors.grey.shade400,
-          size: 28,
         ),
       ),
     );
