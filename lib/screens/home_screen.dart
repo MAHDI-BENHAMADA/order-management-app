@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:googleapis/sheets/v4.dart' as sheets;
@@ -11,7 +13,7 @@ import 'setup_screen.dart';
 class HomeScreen extends StatefulWidget {
   final String spreadsheetId;
 
-  const HomeScreen({Key? key, required this.spreadsheetId}) : super(key: key);
+  const HomeScreen({super.key, required this.spreadsheetId});
 
   @override
   HomeScreenState createState() => HomeScreenState();
@@ -19,35 +21,29 @@ class HomeScreen extends StatefulWidget {
 
 class HomeScreenState extends State<HomeScreen> {
   final ScrollController _scrollController = ScrollController();
+  final TextEditingController _searchController = TextEditingController();
+  Timer? _searchDebounce;
   List<AppOrder> allOrders = [];
   bool isLoading = true;
-  String? filterStatus; // null = show all "جديد", or specific status
-  final Map<String, bool> expandedWilayas = {}; // Track which Wilayas are expanded
-  
-  // Performance caching for Wilaya grouping
-  Map<String, List<AppOrder>>? _cachedGroupedData;
-  String? _cachedFilterStatus;
-  
-  // Dynamic rendering optimization
-  double _screenHeight = 0;
+  String? filterStatus; // null = show all
+  String _searchQuery = '';
 
   @override
   void initState() {
     super.initState();
-    filterStatus = 'جديد'; // Default to "New" orders
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _screenHeight = MediaQuery.of(context).size.height;
-      _calculateVisibleItems();
+    filterStatus = null;
+    _searchController.addListener(() {
+      final nextQuery = _searchController.text.trim();
+      if (nextQuery == _searchQuery) return;
+      _searchDebounce?.cancel();
+      _searchDebounce = Timer(const Duration(milliseconds: 180), () {
+        if (!mounted) return;
+        setState(() {
+          _searchQuery = nextQuery;
+        });
+      });
     });
     fetchData();
-  }
-  
-  // Calculate optimal items to render based on screen height
-  void _calculateVisibleItems() {
-    const itemHeight = 160; // OrderCard approximate height
-    final visibleCount = (_screenHeight ~/ itemHeight) + 2;
-    // Dynamic calculation for reference - used by scroll cache extent
-    debugPrint('Calculated visible items: $visibleCount');
   }
 
   Future<void> fetchData() async {
@@ -60,12 +56,16 @@ class HomeScreenState extends State<HomeScreen> {
         return;
       }
 
-      // Read columns A to K. 
-      final response = await api.spreadsheets.values.get(widget.spreadsheetId, 'A:K');
+      // Read columns A to K.
+      final response = await api.spreadsheets.values.get(
+        widget.spreadsheetId,
+        'A:K',
+      );
       final rows = response.values ?? [];
-      
+
       List<dynamic> parsedData = [];
-      for (int i = 1; i < rows.length; i++) { // Start at 1 to skip headers
+      for (int i = 1; i < rows.length; i++) {
+        // Start at 1 to skip headers
         var r = rows[i];
         // Ensure the row has enough columns (up to name at [2])
         if (r.length >= 3 && r[2].toString().isNotEmpty) {
@@ -81,16 +81,15 @@ class HomeScreenState extends State<HomeScreen> {
             'address': r.length > 7 ? r[7] : "",
             'product': r.length > 8 ? r[8] : "",
             'price': r.length > 9 ? r[9] : "",
-            'trackingNumber': r.length > 10 ? (r[10].toString().isEmpty ? null : r[10].toString()) : null,
+            'trackingNumber': r.length > 10
+                ? (r[10].toString().isEmpty ? null : r[10].toString())
+                : null,
           });
         }
       }
 
       setState(() {
         allOrders = AppOrder.processRawData(parsedData);
-        // Clear cache when data changes
-        _cachedGroupedData = null;
-        _cachedFilterStatus = null;
       });
     } catch (e) {
       _showError('تعذر جلب البيانات: $e');
@@ -108,7 +107,6 @@ class HomeScreenState extends State<HomeScreen> {
 
   Future<void> _logout() async {
     await GoogleAuthService.signOut();
-    _scrollController.dispose();
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('spreadsheetId');
     if (mounted) {
@@ -121,18 +119,41 @@ class HomeScreenState extends State<HomeScreen> {
 
   @override
   void dispose() {
+    _searchDebounce?.cancel();
+    _scrollController.dispose();
+    _searchController.dispose();
     super.dispose();
   }
 
   // Get filtered orders based on current filter
   List<AppOrder> _getFilteredOrders() {
-    if (filterStatus == null) return allOrders;
-    return allOrders.where((o) => o.status == filterStatus).toList();
+    Iterable<AppOrder> filtered = allOrders;
+
+    if (filterStatus != null) {
+      filtered = filtered.where((o) => o.status == filterStatus);
+    }
+
+    if (_searchQuery.isNotEmpty) {
+      final query = _searchQuery.toLowerCase();
+      filtered = filtered.where((o) {
+        final tracking = o.trackingNumber?.toLowerCase() ?? '';
+        return o.name.toLowerCase().contains(query) ||
+            o.phone.contains(query) ||
+            o.wilaya.toLowerCase().contains(query) ||
+            o.commune.toLowerCase().contains(query) ||
+            tracking.contains(query);
+      });
+    }
+
+    return filtered.toList(growable: false);
   }
 
-  // Count orders by status
-  int _getStatusCount(String status) {
-    return allOrders.where((o) => o.status == status).length;
+  Map<String, int> _buildStatusCounts() {
+    final counts = <String, int>{};
+    for (final order in allOrders) {
+      counts[order.status] = (counts[order.status] ?? 0) + 1;
+    }
+    return counts;
   }
 
   Future<void> _updateOrderStatus(AppOrder order, String newStatus) async {
@@ -156,8 +177,12 @@ class HomeScreenState extends State<HomeScreen> {
       if (api == null) throw Exception('API Call failed, not logged in.');
 
       final range = 'F${order.row}'; // Column F holds the status
-      final valueRange = sheets.ValueRange(values: [[newStatus]]);
-      
+      final valueRange = sheets.ValueRange(
+        values: [
+          [newStatus],
+        ],
+      );
+
       await api.spreadsheets.values.update(
         valueRange,
         widget.spreadsheetId,
@@ -173,7 +198,8 @@ class HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  Future<void> _updateOrderFields(AppOrder order, {
+  Future<void> _updateOrderFields(
+    AppOrder order, {
     required String name,
     required String wilaya,
     required String commune,
@@ -186,13 +212,33 @@ class HomeScreenState extends State<HomeScreen> {
       final batchUpdate = sheets.BatchUpdateValuesRequest(
         valueInputOption: 'USER_ENTERED',
         data: [
-          sheets.ValueRange(range: 'C${order.row}', values: [[name]]),
-          sheets.ValueRange(range: 'D${order.row}', values: [[wilaya]]),
-          sheets.ValueRange(range: 'G${order.row}', values: [[commune]]),
-          sheets.ValueRange(range: 'H${order.row}', values: [[address]]),
+          sheets.ValueRange(
+            range: 'C${order.row}',
+            values: [
+              [name],
+            ],
+          ),
+          sheets.ValueRange(
+            range: 'D${order.row}',
+            values: [
+              [wilaya],
+            ],
+          ),
+          sheets.ValueRange(
+            range: 'G${order.row}',
+            values: [
+              [commune],
+            ],
+          ),
+          sheets.ValueRange(
+            range: 'H${order.row}',
+            values: [
+              [address],
+            ],
+          ),
         ],
       );
-      
+
       await api.spreadsheets.values.batchUpdate(
         batchUpdate,
         widget.spreadsheetId,
@@ -225,11 +271,46 @@ class HomeScreenState extends State<HomeScreen> {
     String selectedWilaya = order.wilaya;
 
     final List<String> wilayaList = [
-      'الجزائر', 'بلیدة', 'ورقلة', 'إليزي', 'تيبازة', 'تمنراست', 'تيسمسيلت', 'الوادي', 'البیض',
-      'بسكرة', 'بشار', 'بومرداس', 'تاجنانت', 'تندوف', 'تيارت', 'تلمسان', 'جيجل', 'سطيف',
-      'سعيدة', 'سوق أهراس', 'سكيكدة', 'سيدي بلعباس', 'شلف', 'صفاقس', 'عنابة', 'عين الدفلى',
-      'عين تيموشنت', 'غار الدايس', 'غليزان', 'فرندة', 'قالمة', 'قسنطينة', 'القيروان',
-      'كلم الساحة', 'ميلة', 'مستغانم', 'معسكر', 'مدية', 'مسيلة', 'ولايات غير محددة'
+      'الجزائر',
+      'بلیدة',
+      'ورقلة',
+      'إليزي',
+      'تيبازة',
+      'تمنراست',
+      'تيسمسيلت',
+      'الوادي',
+      'البیض',
+      'بسكرة',
+      'بشار',
+      'بومرداس',
+      'تاجنانت',
+      'تندوف',
+      'تيارت',
+      'تلمسان',
+      'جيجل',
+      'سطيف',
+      'سعيدة',
+      'سوق أهراس',
+      'سكيكدة',
+      'سيدي بلعباس',
+      'شلف',
+      'صفاقس',
+      'عنابة',
+      'عين الدفلى',
+      'عين تيموشنت',
+      'غار الدايس',
+      'غليزان',
+      'فرندة',
+      'قالمة',
+      'قسنطينة',
+      'القيروان',
+      'كلم الساحة',
+      'ميلة',
+      'مستغانم',
+      'معسكر',
+      'مدية',
+      'مسيلة',
+      'ولايات غير محددة',
     ];
 
     showDialog(
@@ -250,8 +331,10 @@ class HomeScreenState extends State<HomeScreen> {
               ),
               const SizedBox(height: 12),
               DropdownButtonFormField<String>(
-                value: selectedWilaya,
-                items: wilayaList.map((w) => DropdownMenuItem(value: w, child: Text(w))).toList(),
+                initialValue: selectedWilaya,
+                items: wilayaList
+                    .map((w) => DropdownMenuItem(value: w, child: Text(w)))
+                    .toList(),
                 onChanged: (val) => selectedWilaya = val ?? order.wilaya,
                 decoration: const InputDecoration(
                   labelText: 'الولاية',
@@ -344,11 +427,13 @@ class HomeScreenState extends State<HomeScreen> {
       // Get Yalidine API token from SharedPreferences
       final prefs = await SharedPreferences.getInstance();
       final yalidineToken = prefs.getString('yalidine_token');
-      
+
       if (yalidineToken == null || yalidineToken.isEmpty) {
         _showError('خطأ: لم يتم حفظ رمز Yalidine. يرجى تحديثه في الإعدادات.');
         return;
       }
+
+      if (!mounted) return;
 
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -382,11 +467,13 @@ class HomeScreenState extends State<HomeScreen> {
       // Get EcoTrack API token from SharedPreferences
       final prefs = await SharedPreferences.getInstance();
       final ecotrackToken = prefs.getString('ecotrack_token');
-      
+
       if (ecotrackToken == null || ecotrackToken.isEmpty) {
         _showError('خطأ: لم يتم حفظ رمز EcoTrack. يرجى تحديثه في الإعدادات.');
         return;
       }
+
+      if (!mounted) return;
 
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -415,7 +502,11 @@ class HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  Future<void> _updateTrackingAndStatus(AppOrder order, String newTrackingNumber, String newStatus) async {
+  Future<void> _updateTrackingAndStatus(
+    AppOrder order,
+    String newTrackingNumber,
+    String newStatus,
+  ) async {
     final oldStatus = order.status;
     final oldTracking = order.trackingNumber;
     setState(() {
@@ -431,11 +522,21 @@ class HomeScreenState extends State<HomeScreen> {
       final batchUpdate = sheets.BatchUpdateValuesRequest(
         valueInputOption: 'USER_ENTERED',
         data: [
-          sheets.ValueRange(range: 'F${order.row}', values: [[newStatus]]),
-          sheets.ValueRange(range: 'K${order.row}', values: [[newTrackingNumber]]),
+          sheets.ValueRange(
+            range: 'F${order.row}',
+            values: [
+              [newStatus],
+            ],
+          ),
+          sheets.ValueRange(
+            range: 'K${order.row}',
+            values: [
+              [newTrackingNumber],
+            ],
+          ),
         ],
       );
-      
+
       await api.spreadsheets.values.batchUpdate(
         batchUpdate,
         widget.spreadsheetId,
@@ -450,31 +551,18 @@ class HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  // Group orders by Wilaya - with caching for performance
-  Map<String, List<AppOrder>> _groupByWilaya(List<AppOrder> orders) {
-    if (_cachedFilterStatus == filterStatus && _cachedGroupedData != null) {
-      return _cachedGroupedData!;
-    }
-    
-    Map<String, List<AppOrder>> grouped = {};
-    for (var order in orders) {
-      final wilaya = order.wilaya.isEmpty ? 'ولايات غير محددة' : order.wilaya;
-      grouped.putIfAbsent(wilaya, () => []);
-      grouped[wilaya]!.add(order);
-    }
-    
-    _cachedFilterStatus = filterStatus;
-    _cachedGroupedData = grouped;
-    return grouped;
-  }
-
   @override
   Widget build(BuildContext context) {
     final filteredOrders = _getFilteredOrders();
+    final totalOrders = allOrders.length;
+    final statusCounts = _buildStatusCounts();
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('لوحة تتبع الطلبات', style: TextStyle(fontWeight: FontWeight.bold)),
+        title: const Text(
+          'لوحة تتبع الطلبات',
+          style: TextStyle(fontWeight: FontWeight.bold),
+        ),
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh),
@@ -491,253 +579,209 @@ class HomeScreenState extends State<HomeScreen> {
         ],
       ),
       body: isLoading
-          ? const Center(child: CircularProgressIndicator(color: Color(0xFF10B981)))
+          ? const Center(
+              child: CircularProgressIndicator(color: Color(0xFF10B981)),
+            )
           : Column(
               children: [
-                // 5-Icon Filter Navigation Bar
-                Container(
-                  color: Colors.white,
-                  padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                    children: [
-                      _buildFilterIcon(
-                        icon: Icons.inbox,
-                        label: 'الكل',
-                        count: allOrders.length,
-                        status: null,
-                        color: Colors.blueGrey,
-                      ),
-                      _buildFilterIcon(
-                        icon: Icons.check_circle,
-                        label: 'مؤكد',
-                        count: _getStatusCount('confirm'),
-                        status: 'confirm',
-                        color: const Color(0xFF10B981),
-                      ),
-                      _buildFilterIcon(
-                        icon: Icons.hourglass_empty_rounded,
-                        label: 'لا إجابة',
-                        count: _getStatusCount('no_response'),
-                        status: 'no_response',
-                        color: Colors.orangeAccent,
-                      ),
-                      _buildFilterIcon(
-                        icon: Icons.cancel,
-                        label: 'ملغى',
-                        count: _getStatusCount('canceled'),
-                        status: 'canceled',
-                        color: Colors.redAccent,
-                      ),
-                      _buildFilterIcon(
-                        icon: Icons.upload_rounded,
-                        label: 'أرشيف',
-                        count: _getStatusCount('uploaded'),
-                        status: 'uploaded',
-                        color: const Color(0xFF065F46),
-                      ),
-                    ],
-                  ),
+                _buildHeaderPanel(
+                  totalOrders: totalOrders,
+                  visibleOrders: filteredOrders.length,
+                  statusCounts: statusCounts,
                 ),
-                // Orders List/ExpansionTiles
                 Expanded(
-                  child: filteredOrders.isEmpty
-                      ? const Center(child: Text('لا توجد طلبات هنا', style: TextStyle(color: Colors.grey)))
-                      : RefreshIndicator(
-                          onRefresh: fetchData,
-                          color: const Color(0xFF10B981),
-                          child: filterStatus == 'جديد'
-                              ? _buildNewOrdersWithExpansion(filteredOrders)
-                              : _buildOrderList(filteredOrders),
-                        ),
+                  child: RefreshIndicator(
+                    onRefresh: fetchData,
+                    color: const Color(0xFF10B981),
+                    child: _buildOrderList(filteredOrders),
+                  ),
                 ),
               ],
             ),
     );
   }
 
-  Widget _buildFilterIcon({
-    required IconData icon,
-    required String label,
-    required int count,
-    required String? status,
-    required Color color,
+  Widget _buildHeaderPanel({
+    required int totalOrders,
+    required int visibleOrders,
+    required Map<String, int> statusCounts,
   }) {
-    final isActive = filterStatus == status;
-    return InkWell(
-      onTap: () => setState(() => filterStatus = status),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Stack(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: isActive ? color.withOpacity(0.15) : Colors.transparent,
-                ),
-                child: Icon(
-                  icon,
-                  color: isActive ? color : Colors.grey,
-                  size: 28,
+    return Material(
+      color: Colors.white,
+      elevation: 1,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
+        child: Column(
+          children: [
+            TextField(
+              controller: _searchController,
+              textDirection: TextDirection.rtl,
+              decoration: InputDecoration(
+                hintText: 'ابحث بالاسم أو الهاتف أو الولاية أو رقم التتبع',
+                prefixIcon: const Icon(Icons.search),
+                suffixIcon: _searchQuery.isEmpty
+                    ? null
+                    : IconButton(
+                        icon: const Icon(Icons.clear),
+                        tooltip: 'مسح البحث',
+                        onPressed: () => _searchController.clear(),
+                      ),
+                isDense: true,
+                filled: true,
+                fillColor: const Color(0xFFF7F7F7),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide.none,
                 ),
               ),
-              if (count > 0)
-                Positioned(
-                  right: 0,
-                  top: 0,
-                  child: Container(
-                    padding: const EdgeInsets.all(2),
-                    decoration: BoxDecoration(
-                      color: color,
-                      shape: BoxShape.circle,
-                    ),
-                    child: Text(
-                      count.toString(),
-                      style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
-                    ),
+            ),
+            const SizedBox(height: 10),
+            SizedBox(
+              height: 40,
+              child: ListView(
+                scrollDirection: Axis.horizontal,
+                children: [
+                  _buildStatusChip(
+                    'الكل',
+                    null,
+                    allOrders.length,
+                    Icons.inbox,
+                    Colors.blueGrey,
                   ),
+                  const SizedBox(width: 8),
+                  _buildStatusChip(
+                    'جديد',
+                    'جديد',
+                    statusCounts['جديد'] ?? 0,
+                    Icons.fiber_new,
+                    const Color(0xFF2563EB),
+                  ),
+                  const SizedBox(width: 8),
+                  _buildStatusChip(
+                    'مؤكد',
+                    'confirm',
+                    statusCounts['confirm'] ?? 0,
+                    Icons.check_circle,
+                    const Color(0xFF10B981),
+                  ),
+                  const SizedBox(width: 8),
+                  _buildStatusChip(
+                    'لا إجابة',
+                    'no_response',
+                    statusCounts['no_response'] ?? 0,
+                    Icons.hourglass_empty_rounded,
+                    Colors.orangeAccent,
+                  ),
+                  const SizedBox(width: 8),
+                  _buildStatusChip(
+                    'ملغى',
+                    'canceled',
+                    statusCounts['canceled'] ?? 0,
+                    Icons.cancel,
+                    Colors.redAccent,
+                  ),
+                  const SizedBox(width: 8),
+                  _buildStatusChip(
+                    'أرشيف',
+                    'uploaded',
+                    statusCounts['uploaded'] ?? 0,
+                    Icons.upload_rounded,
+                    const Color(0xFF065F46),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 6),
+            Align(
+              alignment: Alignment.centerRight,
+              child: Text(
+                'عرض $visibleOrders من $totalOrders طلب',
+                style: const TextStyle(
+                  fontSize: 12,
+                  color: Colors.black54,
+                  fontWeight: FontWeight.w600,
                 ),
-            ],
-          ),
-          const SizedBox(height: 4),
-          Text(label, style: const TextStyle(fontSize: 10)),
-        ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 
-  Widget _buildNewOrdersWithExpansion(List<AppOrder> orders) {
-    final grouped = _groupByWilaya(orders);
-    final sortedWilayas = grouped.keys.toList()..sort();
-
-    return CustomScrollView(
-      controller: _scrollController,
-      physics: const BouncingScrollPhysics(
-        parent: AlwaysScrollableScrollPhysics(),
+  Widget _buildStatusChip(
+    String label,
+    String? status,
+    int count,
+    IconData icon,
+    Color color,
+  ) {
+    final isActive = filterStatus == status;
+    return FilterChip(
+      selected: isActive,
+      onSelected: (_) {
+        setState(() {
+          filterStatus = status;
+        });
+      },
+      showCheckmark: false,
+      avatar: Icon(icon, size: 16, color: isActive ? color : Colors.black54),
+      label: Text('$label ($count)'),
+      selectedColor: color.withValues(alpha: 0.14),
+      side: BorderSide(color: isActive ? color : Colors.black12),
+      backgroundColor: Colors.white,
+      labelStyle: TextStyle(
+        fontWeight: isActive ? FontWeight.bold : FontWeight.w500,
+        color: Colors.black87,
       ),
-      slivers: [
-        SliverPadding(
-          padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
-          sliver: SliverList(
-            delegate: SliverChildBuilderDelegate(
-              (context, index) {
-                final wilaya = sortedWilayas[index];
-                final wilayaOrders = grouped[wilaya]!;
-                return RepaintBoundary(
-                  child: ExpansionTile(
-                    key: ValueKey(wilaya),
-                    title: Text(
-                      '$wilaya (${wilayaOrders.length})',
-                      style: const TextStyle(fontWeight: FontWeight.bold),
-                    ),
-                    initiallyExpanded: false,
-                    onExpansionChanged: (expanded) {
-                      setState(() {
-                        if (expanded) {
-                          expandedWilayas.clear();
-                        }
-                        expandedWilayas[wilaya] = expanded;
-                      });
-                    },
-                    children: [
-                      _LazyOrderListBuilder(
-                        orders: wilayaOrders,
-                        onStatusChange: (order, status) => _updateOrderStatus(order, status),
-                        onEdit: (order) => _showEditDialog(order),
-                        onShip: (order) => _showLogisticsSheet(order),
-                      ),
-                    ],
-                  ),
-                );
-              },
-              childCount: sortedWilayas.length,
-              addAutomaticKeepAlives: true,
-              addRepaintBoundaries: true,
-            ),
-          ),
-        ),
-      ],
     );
   }
 
   Widget _buildOrderList(List<AppOrder> orders) {
-    if (orders.isEmpty) {
-      return const Center(
-        child: Text('لا توجد طلبات هنا', style: TextStyle(color: Colors.grey)),
-      );
-    }
-
     return CustomScrollView(
       controller: _scrollController,
-      physics: const BouncingScrollPhysics(
-        parent: AlwaysScrollableScrollPhysics(),
+      physics: const AlwaysScrollableScrollPhysics(
+        parent: ClampingScrollPhysics(),
       ),
       slivers: [
-        SliverPadding(
-          padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
-          sliver: SliverList(
-            delegate: SliverChildBuilderDelegate(
-              (context, index) {
-                final order = orders[index];
-                return Padding(
-                  padding: const EdgeInsets.only(bottom: 8),
-                  child: RepaintBoundary(
-                    child: OrderCard(
-                      key: ValueKey(order.row),
-                      order: order,
-                      onStatusChange: (newStatus) => _updateOrderStatus(order, newStatus),
-                      onEdit: () => _showEditDialog(order),
-                      onShip: () => _showLogisticsSheet(order),
+        if (orders.isEmpty)
+          const SliverFillRemaining(
+            hasScrollBody: false,
+            child: Center(
+              child: Text(
+                'لا توجد طلبات مطابقة',
+                style: TextStyle(color: Colors.grey),
+              ),
+            ),
+          )
+        else
+          SliverPadding(
+            padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+            sliver: SliverList(
+              delegate: SliverChildBuilderDelegate(
+                (context, index) {
+                  final order = orders[index];
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: RepaintBoundary(
+                      child: OrderCard(
+                        key: ValueKey(order.row),
+                        order: order,
+                        onStatusChange: (newStatus) =>
+                            _updateOrderStatus(order, newStatus),
+                        onEdit: () => _showEditDialog(order),
+                        onShip: () => _showLogisticsSheet(order),
+                      ),
                     ),
-                  ),
-                );
-              },
-              childCount: orders.length,
-              addAutomaticKeepAlives: true,
-              addRepaintBoundaries: true,
+                  );
+                },
+                childCount: orders.length,
+                addAutomaticKeepAlives: false,
+                addRepaintBoundaries: true,
+              ),
             ),
           ),
-        ),
       ],
-    );
-  }
-}
-
-/// Lazy-loading widget for orders within ExpansionTile
-class _LazyOrderListBuilder extends StatelessWidget {
-  final List<AppOrder> orders;
-  final Function(AppOrder, String) onStatusChange;
-  final Function(AppOrder) onEdit;
-  final Function(AppOrder) onShip;
-
-  const _LazyOrderListBuilder({
-    required this.orders,
-    required this.onStatusChange,
-    required this.onEdit,
-    required this.onShip,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return ListView.separated(
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      itemCount: orders.length,
-      separatorBuilder: (context, index) => const SizedBox(height: 8),
-      itemBuilder: (context, index) {
-        final order = orders[index];
-        return RepaintBoundary(
-          child: OrderCard(
-            key: ValueKey(order.row),
-            order: order,
-            onStatusChange: (newStatus) => onStatusChange(order, newStatus),
-            onEdit: () => onEdit(order),
-            onShip: () => onShip(order),
-          ),
-        );
-      },
     );
   }
 }
