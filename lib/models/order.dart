@@ -4,11 +4,11 @@ class AppOrder {
   final String time;
   String name;
   String wilaya;
-  final String phone;
+  String phone;
   String commune;
   String address;
-  final String product;
-  final String price;
+  String product;
+  String price;
   String? trackingNumber;
   String status; // Mutable for local state changes
 
@@ -55,7 +55,7 @@ class AppOrder {
 
     for (var item in rawData) {
       final order = AppOrder.fromJson(item as Map<String, dynamic>);
-      
+
       if (!uniqueOrders.containsKey(order.phone)) {
         uniqueOrders[order.phone] = order;
       } else {
@@ -63,9 +63,10 @@ class AppOrder {
         // Priority 1: The row with the most completed fields (Name + Phone + Wilaya).
         if (order.completionScore > existingOrder.completionScore) {
           uniqueOrders[order.phone] = order;
-        } 
+        }
         // Priority 2: If data is equal, pick the newest entry (highest row index).
-        else if (order.completionScore == existingOrder.completionScore && order.row > existingOrder.row) {
+        else if (order.completionScore == existingOrder.completionScore &&
+            order.row > existingOrder.row) {
           uniqueOrders[order.phone] = order;
         }
       }
