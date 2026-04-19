@@ -5,10 +5,23 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:googleapis/sheets/v4.dart' as sheets;
 import '../models/order.dart';
 import '../widgets/order_card.dart';
+import '../utils/algeria_location_service.dart';
 import '../utils/google_auth_service.dart';
 import '../services/yalidine_service.dart';
 import '../services/ecotrack_service.dart';
 import 'setup_screen.dart';
+
+class _ShippingReadiness {
+  final Map<String, String> normalizedValues;
+  final Set<String> blockingFields;
+
+  const _ShippingReadiness({
+    required this.normalizedValues,
+    required this.blockingFields,
+  });
+
+  bool get isReady => blockingFields.isEmpty;
+}
 
 class HomeScreen extends StatefulWidget {
   final String spreadsheetId;
@@ -23,6 +36,8 @@ class HomeScreenState extends State<HomeScreen> {
   final ScrollController _scrollController = ScrollController();
   final TextEditingController _searchController = TextEditingController();
   Timer? _searchDebounce;
+  bool _locationDataReady = false;
+  final Set<int> _shippingRowsInProgress = <int>{};
   List<AppOrder> allOrders = [];
   bool isLoading = true;
   String? filterStatus; // null = show all
@@ -43,7 +58,23 @@ class HomeScreenState extends State<HomeScreen> {
         });
       });
     });
+    _loadLocationData();
     fetchData();
+  }
+
+  Future<void> _loadLocationData() async {
+    try {
+      await AlgeriaLocationService.ensureLoaded();
+      if (!mounted) return;
+      setState(() {
+        _locationDataReady = true;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _locationDataReady = false;
+      });
+    }
   }
 
   Future<void> fetchData() async {
@@ -198,12 +229,225 @@ class HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  Future<void> _updateOrderFields(
+  String _normalizePhone(String phone) {
+    final digits = phone.replaceAll(RegExp(r'[^0-9]'), '');
+    if (digits.startsWith('213') && digits.length == 12) {
+      return '0${digits.substring(3)}';
+    }
+    if (digits.length == 9 && RegExp(r'^[567]').hasMatch(digits)) {
+      return '0$digits';
+    }
+    return digits;
+  }
+
+  bool _isValidAlgerianPhone(String phone) {
+    final normalized = _normalizePhone(phone);
+    return RegExp(r'^0[5-7][0-9]{8}$').hasMatch(normalized);
+  }
+
+  String _fieldLabel(String key) {
+    switch (key) {
+      case 'name':
+        return 'الاسم';
+      case 'phone':
+        return 'الهاتف';
+      case 'wilaya':
+        return 'الولاية';
+      case 'commune':
+        return 'البلدية';
+      case 'address':
+        return 'العنوان';
+      case 'product':
+        return 'المنتج';
+      case 'price':
+        return 'السعر';
+      default:
+        return key;
+    }
+  }
+
+  _ShippingReadiness _buildShippingReadiness(
+    AppOrder order, {
+    required bool forEcoTrack,
+  }) {
+    final normalized = <String, String>{
+      'name': order.name.trim(),
+      'phone': _normalizePhone(order.phone),
+      'wilaya': order.wilaya.trim(),
+      'commune': order.commune.trim(),
+      'address': order.address.trim(),
+      'product': order.product.trim().isNotEmpty ? order.product.trim() : 'طلب',
+      'price': order.price.trim().isNotEmpty ? order.price.trim() : '0',
+    };
+
+    if (_locationDataReady) {
+      final normalizedWilaya = AlgeriaLocationService.normalizeWilaya(
+        normalized['wilaya']!,
+      );
+      if (normalizedWilaya != null) {
+        normalized['wilaya'] = normalizedWilaya;
+      }
+
+      if (normalized['commune']!.isEmpty && normalized['wilaya']!.isNotEmpty) {
+        final communes = AlgeriaLocationService.getCommunesForWilaya(
+          normalized['wilaya']!,
+        );
+        if (communes.isNotEmpty) {
+          normalized['commune'] = communes.first;
+        }
+      }
+
+      if (normalized['wilaya']!.isNotEmpty &&
+          normalized['commune']!.isNotEmpty) {
+        final normalizedCommune = AlgeriaLocationService.normalizeCommune(
+          normalized['wilaya']!,
+          normalized['commune']!,
+        );
+        if (normalizedCommune != null) {
+          normalized['commune'] = normalizedCommune;
+        }
+      }
+    }
+
+    if (normalized['address']!.isEmpty &&
+        normalized['wilaya']!.isNotEmpty &&
+        normalized['commune']!.isNotEmpty) {
+      normalized['address'] =
+          '${normalized['commune']!} - ${normalized['wilaya']!}';
+    }
+
+    final blocking = <String>{};
+
+    for (final field in [
+      'name',
+      'phone',
+      'wilaya',
+      'commune',
+      'address',
+      'product',
+      'price',
+    ]) {
+      if (normalized[field]!.trim().isEmpty) {
+        blocking.add(field);
+      }
+    }
+
+    if (!_isValidAlgerianPhone(normalized['phone']!)) {
+      blocking.add('phone');
+    }
+
+    if (_locationDataReady &&
+        AlgeriaLocationService.normalizeWilaya(normalized['wilaya']!) == null) {
+      blocking.add('wilaya');
+    }
+
+    if (_locationDataReady &&
+        normalized['wilaya']!.isNotEmpty &&
+        normalized['commune']!.isNotEmpty &&
+        !AlgeriaLocationService.isValidCommuneForWilaya(
+          normalized['wilaya']!,
+          normalized['commune']!,
+        )) {
+      blocking.add('commune');
+    }
+
+    if (forEcoTrack &&
+        normalized['wilaya']!.isNotEmpty &&
+        !EcoTrackService.wilayaCodes.containsKey(normalized['wilaya']!)) {
+      blocking.add('wilaya');
+    }
+
+    final parsedPrice = int.tryParse(normalized['price']!);
+    if (parsedPrice == null || parsedPrice < 0) {
+      blocking.add('price');
+    }
+
+    return _ShippingReadiness(
+      normalizedValues: normalized,
+      blockingFields: blocking,
+    );
+  }
+
+  bool _hasNormalizedChanges(AppOrder order, Map<String, String> values) {
+    return order.name.trim() != values['name'] ||
+        order.phone.trim() != values['phone'] ||
+        order.wilaya.trim() != values['wilaya'] ||
+        order.commune.trim() != values['commune'] ||
+        order.address.trim() != values['address'] ||
+        order.product.trim() != values['product'] ||
+        order.price.trim() != values['price'];
+  }
+
+  Future<bool> _saveNormalizedValues(
+    AppOrder order,
+    Map<String, String> values, {
+    bool showSuccessMessage = false,
+  }) {
+    return _updateOrderFields(
+      order,
+      name: values['name']!,
+      phone: values['phone']!,
+      wilaya: values['wilaya']!,
+      commune: values['commune']!,
+      address: values['address']!,
+      product: values['product']!,
+      price: values['price']!,
+      showSuccessMessage: showSuccessMessage,
+    );
+  }
+
+  Future<bool> _ensureReadyForShipping(
+    AppOrder order, {
+    required bool forEcoTrack,
+  }) async {
+    final readiness = _buildShippingReadiness(order, forEcoTrack: forEcoTrack);
+
+    if (readiness.isReady) {
+      if (_hasNormalizedChanges(order, readiness.normalizedValues)) {
+        return _saveNormalizedValues(order, readiness.normalizedValues);
+      }
+      return true;
+    }
+
+    final completed = await _showOrderFormDialog(
+      order,
+      title: 'أكمل البيانات قبل الشحن',
+      saveLabel: 'حفظ ومتابعة',
+      visibleFields: readiness.blockingFields,
+      requiredFields: readiness.blockingFields,
+      initialValues: readiness.normalizedValues,
+      showSuccessMessage: false,
+    );
+
+    if (!completed) return false;
+
+    final secondCheck = _buildShippingReadiness(
+      order,
+      forEcoTrack: forEcoTrack,
+    );
+    if (!secondCheck.isReady) {
+      final missing = secondCheck.blockingFields.map(_fieldLabel).join('، ');
+      _showError('لا يمكن الشحن قبل إكمال: $missing');
+      return false;
+    }
+
+    if (_hasNormalizedChanges(order, secondCheck.normalizedValues)) {
+      return _saveNormalizedValues(order, secondCheck.normalizedValues);
+    }
+
+    return true;
+  }
+
+  Future<bool> _updateOrderFields(
     AppOrder order, {
     required String name,
+    required String phone,
     required String wilaya,
     required String commune,
     required String address,
+    required String product,
+    required String price,
+    bool showSuccessMessage = true,
   }) async {
     try {
       final api = await GoogleAuthService.getSheetsApi();
@@ -225,6 +469,12 @@ class HomeScreenState extends State<HomeScreen> {
             ],
           ),
           sheets.ValueRange(
+            range: 'E${order.row}',
+            values: [
+              [phone],
+            ],
+          ),
+          sheets.ValueRange(
             range: 'G${order.row}',
             values: [
               [commune],
@@ -234,6 +484,18 @@ class HomeScreenState extends State<HomeScreen> {
             range: 'H${order.row}',
             values: [
               [address],
+            ],
+          ),
+          sheets.ValueRange(
+            range: 'I${order.row}',
+            values: [
+              [product],
+            ],
+          ),
+          sheets.ValueRange(
+            range: 'J${order.row}',
+            values: [
+              [price],
             ],
           ),
         ],
@@ -246,11 +508,15 @@ class HomeScreenState extends State<HomeScreen> {
 
       setState(() {
         order.name = name;
-        // Note: wilaya, commune, address are final in the current model, so this won't work.
-        // You'll need to make them mutable or create a separate edit state.
+        order.phone = phone;
+        order.wilaya = wilaya;
+        order.commune = commune;
+        order.address = address;
+        order.product = product;
+        order.price = price;
       });
 
-      if (mounted) {
+      if (mounted && showSuccessMessage) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('تم حفظ التعديلات بنجاح!'),
@@ -259,134 +525,351 @@ class HomeScreenState extends State<HomeScreen> {
           ),
         );
       }
+
+      return true;
     } catch (e) {
       _showError('خطأ أثناء حفظ التعديلات: $e');
+      return false;
     }
   }
 
-  void _showEditDialog(AppOrder order) {
-    final nameController = TextEditingController(text: order.name);
-    final communeController = TextEditingController(text: order.commune);
-    final addressController = TextEditingController(text: order.address);
-    String selectedWilaya = order.wilaya;
-
-    final List<String> wilayaList = [
-      'الجزائر',
-      'بلیدة',
-      'ورقلة',
-      'إليزي',
-      'تيبازة',
-      'تمنراست',
-      'تيسمسيلت',
-      'الوادي',
-      'البیض',
-      'بسكرة',
-      'بشار',
-      'بومرداس',
-      'تاجنانت',
-      'تندوف',
-      'تيارت',
-      'تلمسان',
-      'جيجل',
-      'سطيف',
-      'سعيدة',
-      'سوق أهراس',
-      'سكيكدة',
-      'سيدي بلعباس',
-      'شلف',
-      'صفاقس',
-      'عنابة',
-      'عين الدفلى',
-      'عين تيموشنت',
-      'غار الدايس',
-      'غليزان',
-      'فرندة',
-      'قالمة',
-      'قسنطينة',
-      'القيروان',
-      'كلم الساحة',
-      'ميلة',
-      'مستغانم',
-      'معسكر',
-      'مدية',
-      'مسيلة',
-      'ولايات غير محددة',
-    ];
-
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('تعديل الطلب', textAlign: TextAlign.right),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: nameController,
-                decoration: const InputDecoration(
-                  labelText: 'الاسم الكامل',
-                  border: OutlineInputBorder(),
-                ),
-                textDirection: TextDirection.rtl,
-              ),
-              const SizedBox(height: 12),
-              DropdownButtonFormField<String>(
-                initialValue: selectedWilaya,
-                items: wilayaList
-                    .map((w) => DropdownMenuItem(value: w, child: Text(w)))
-                    .toList(),
-                onChanged: (val) => selectedWilaya = val ?? order.wilaya,
-                decoration: const InputDecoration(
-                  labelText: 'الولاية',
-                  border: OutlineInputBorder(),
-                ),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: communeController,
-                decoration: const InputDecoration(
-                  labelText: 'البلدية',
-                  border: OutlineInputBorder(),
-                ),
-                textDirection: TextDirection.rtl,
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: addressController,
-                decoration: const InputDecoration(
-                  labelText: 'العنوان',
-                  border: OutlineInputBorder(),
-                ),
-                textDirection: TextDirection.rtl,
-                maxLines: 3,
-              ),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('إلغاء'),
-          ),
-          TextButton(
-            onPressed: () {
-              _updateOrderFields(
-                order,
-                name: nameController.text,
-                wilaya: selectedWilaya,
-                commune: communeController.text,
-                address: addressController.text,
-              );
-              Navigator.pop(context);
-            },
-            child: const Text('حفظ'),
-          ),
-        ],
-      ),
+  Future<bool> _showEditDialog(AppOrder order) {
+    return _showOrderFormDialog(
+      order,
+      title: 'تعديل الطلب',
+      saveLabel: 'حفظ',
+      showSuccessMessage: true,
     );
   }
 
+  Future<bool> _showOrderFormDialog(
+    AppOrder order, {
+    required String title,
+    required String saveLabel,
+    Set<String>? visibleFields,
+    Set<String>? requiredFields,
+    Map<String, String>? initialValues,
+    bool showSuccessMessage = true,
+  }) async {
+    final values =
+        initialValues ??
+        <String, String>{
+          'name': order.name,
+          'phone': order.phone,
+          'wilaya': order.wilaya,
+          'commune': order.commune,
+          'address': order.address,
+          'product': order.product,
+          'price': order.price,
+        };
+
+    final nameController = TextEditingController(text: values['name'] ?? '');
+    final phoneController = TextEditingController(text: values['phone'] ?? '');
+    final addressController = TextEditingController(
+      text: values['address'] ?? '',
+    );
+    final productController = TextEditingController(
+      text: values['product'] ?? '',
+    );
+    final priceController = TextEditingController(text: values['price'] ?? '');
+    final communeController = TextEditingController(
+      text: values['commune'] ?? '',
+    );
+    final wilayaController = TextEditingController(
+      text: values['wilaya'] ?? '',
+    );
+
+    String selectedWilaya = wilayaController.text.trim();
+    if (_locationDataReady) {
+      selectedWilaya =
+          AlgeriaLocationService.normalizeWilaya(selectedWilaya) ??
+          selectedWilaya;
+      wilayaController.text = selectedWilaya;
+
+      final normalizedCommune = AlgeriaLocationService.normalizeCommune(
+        selectedWilaya,
+        communeController.text,
+      );
+      if (normalizedCommune != null) {
+        communeController.text = normalizedCommune;
+      }
+    }
+
+    bool showField(String key) {
+      return visibleFields == null || visibleFields.contains(key);
+    }
+
+    final needed = requiredFields ?? <String>{};
+
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (dialogContext, setDialogState) {
+            final wilayas = _locationDataReady
+                ? AlgeriaLocationService.getWilayas()
+                : const <String>[];
+            final communes = _locationDataReady
+                ? AlgeriaLocationService.getCommunesForWilaya(selectedWilaya)
+                : const <String>[];
+
+            return AlertDialog(
+              title: Text(title, textAlign: TextAlign.right),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (showField('name')) ...[
+                      TextField(
+                        controller: nameController,
+                        decoration: const InputDecoration(
+                          labelText: 'الاسم الكامل',
+                          border: OutlineInputBorder(),
+                        ),
+                        textDirection: TextDirection.rtl,
+                      ),
+                      const SizedBox(height: 12),
+                    ],
+                    if (showField('phone')) ...[
+                      TextField(
+                        controller: phoneController,
+                        keyboardType: TextInputType.phone,
+                        decoration: const InputDecoration(
+                          labelText: 'رقم الهاتف',
+                          border: OutlineInputBorder(),
+                        ),
+                        textDirection: TextDirection.ltr,
+                      ),
+                      const SizedBox(height: 12),
+                    ],
+                    if (showField('wilaya')) ...[
+                      if (_locationDataReady)
+                        DropdownButtonFormField<String>(
+                          initialValue: wilayas.contains(selectedWilaya)
+                              ? selectedWilaya
+                              : null,
+                          items: wilayas
+                              .map(
+                                (w) =>
+                                    DropdownMenuItem(value: w, child: Text(w)),
+                              )
+                              .toList(),
+                          onChanged: (value) {
+                            setDialogState(() {
+                              selectedWilaya = value ?? '';
+                              wilayaController.text = selectedWilaya;
+
+                              final nextCommunes =
+                                  AlgeriaLocationService.getCommunesForWilaya(
+                                    selectedWilaya,
+                                  );
+                              if (nextCommunes.isNotEmpty) {
+                                communeController.text = nextCommunes.first;
+                              } else {
+                                communeController.clear();
+                              }
+                            });
+                          },
+                          decoration: const InputDecoration(
+                            labelText: 'الولاية',
+                            border: OutlineInputBorder(),
+                          ),
+                        )
+                      else
+                        TextField(
+                          controller: wilayaController,
+                          decoration: const InputDecoration(
+                            labelText: 'الولاية',
+                            border: OutlineInputBorder(),
+                          ),
+                          textDirection: TextDirection.rtl,
+                        ),
+                      const SizedBox(height: 12),
+                    ],
+                    if (showField('commune')) ...[
+                      if (_locationDataReady && communes.isNotEmpty)
+                        DropdownButtonFormField<String>(
+                          initialValue:
+                              communes.contains(communeController.text)
+                              ? communeController.text
+                              : communes.first,
+                          items: communes
+                              .map(
+                                (c) =>
+                                    DropdownMenuItem(value: c, child: Text(c)),
+                              )
+                              .toList(),
+                          onChanged: (value) {
+                            setDialogState(() {
+                              communeController.text = value ?? '';
+                            });
+                          },
+                          decoration: const InputDecoration(
+                            labelText: 'البلدية',
+                            border: OutlineInputBorder(),
+                          ),
+                        )
+                      else
+                        TextField(
+                          controller: communeController,
+                          decoration: const InputDecoration(
+                            labelText: 'البلدية',
+                            border: OutlineInputBorder(),
+                          ),
+                          textDirection: TextDirection.rtl,
+                        ),
+                      const SizedBox(height: 12),
+                    ],
+                    if (showField('address')) ...[
+                      TextField(
+                        controller: addressController,
+                        decoration: const InputDecoration(
+                          labelText: 'العنوان',
+                          border: OutlineInputBorder(),
+                        ),
+                        textDirection: TextDirection.rtl,
+                        maxLines: 3,
+                      ),
+                      const SizedBox(height: 12),
+                    ],
+                    if (showField('product')) ...[
+                      TextField(
+                        controller: productController,
+                        decoration: const InputDecoration(
+                          labelText: 'المنتج',
+                          border: OutlineInputBorder(),
+                        ),
+                        textDirection: TextDirection.rtl,
+                      ),
+                      const SizedBox(height: 12),
+                    ],
+                    if (showField('price'))
+                      TextField(
+                        controller: priceController,
+                        keyboardType: TextInputType.number,
+                        decoration: const InputDecoration(
+                          labelText: 'السعر',
+                          border: OutlineInputBorder(),
+                        ),
+                        textDirection: TextDirection.ltr,
+                      ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(dialogContext, false),
+                  child: const Text('إلغاء'),
+                ),
+                TextButton(
+                  onPressed: () async {
+                    final data = <String, String>{
+                      'name': nameController.text.trim(),
+                      'phone': _normalizePhone(phoneController.text.trim()),
+                      'wilaya': wilayaController.text.trim(),
+                      'commune': communeController.text.trim(),
+                      'address': addressController.text.trim(),
+                      'product': productController.text.trim(),
+                      'price': priceController.text.trim(),
+                    };
+
+                    final missing = <String>[];
+                    for (final field in needed) {
+                      if ((data[field] ?? '').isEmpty) {
+                        missing.add(_fieldLabel(field));
+                      }
+                    }
+
+                    if (showField('phone') && data['phone']!.isNotEmpty) {
+                      if (!_isValidAlgerianPhone(data['phone']!)) {
+                        missing.add(_fieldLabel('phone'));
+                      }
+                    }
+
+                    if (_locationDataReady && showField('wilaya')) {
+                      final normalizedWilaya =
+                          AlgeriaLocationService.normalizeWilaya(
+                            data['wilaya']!,
+                          );
+                      if (normalizedWilaya == null) {
+                        missing.add(_fieldLabel('wilaya'));
+                      } else {
+                        data['wilaya'] = normalizedWilaya;
+                      }
+                    }
+
+                    if (_locationDataReady &&
+                        showField('commune') &&
+                        data['wilaya']!.isNotEmpty &&
+                        data['commune']!.isNotEmpty) {
+                      final normalizedCommune =
+                          AlgeriaLocationService.normalizeCommune(
+                            data['wilaya']!,
+                            data['commune']!,
+                          );
+                      if (normalizedCommune == null) {
+                        missing.add(_fieldLabel('commune'));
+                      } else {
+                        data['commune'] = normalizedCommune;
+                      }
+                    }
+
+                    if (showField('price') && data['price']!.isNotEmpty) {
+                      final parsed = int.tryParse(data['price']!);
+                      if (parsed == null || parsed < 0) {
+                        missing.add(_fieldLabel('price'));
+                      }
+                    }
+
+                    if (missing.isNotEmpty) {
+                      _showError('يرجى مراجعة: ${missing.toSet().join('، ')}');
+                      return;
+                    }
+
+                    final saved = await _updateOrderFields(
+                      order,
+                      name: data['name']!.isNotEmpty
+                          ? data['name']!
+                          : order.name,
+                      phone: data['phone']!.isNotEmpty
+                          ? data['phone']!
+                          : order.phone,
+                      wilaya: data['wilaya']!.isNotEmpty
+                          ? data['wilaya']!
+                          : order.wilaya,
+                      commune: data['commune']!.isNotEmpty
+                          ? data['commune']!
+                          : order.commune,
+                      address: data['address']!.isNotEmpty
+                          ? data['address']!
+                          : order.address,
+                      product: data['product']!.isNotEmpty
+                          ? data['product']!
+                          : (order.product.isNotEmpty ? order.product : 'طلب'),
+                      price: data['price']!.isNotEmpty
+                          ? data['price']!
+                          : (order.price.isNotEmpty ? order.price : '0'),
+                      showSuccessMessage: showSuccessMessage,
+                    );
+
+                    if (!saved || !dialogContext.mounted) return;
+                    Navigator.pop(dialogContext, true);
+                  },
+                  child: Text(saveLabel),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    return result ?? false;
+  }
+
   void _showLogisticsSheet(AppOrder order) {
+    if (_shippingRowsInProgress.contains(order.row)) return;
+
     showModalBottomSheet(
       context: context,
       builder: (context) => Container(
@@ -423,7 +906,12 @@ class HomeScreenState extends State<HomeScreen> {
   }
 
   void _shipWithYalidine(AppOrder order) async {
+    if (_shippingRowsInProgress.contains(order.row)) return;
+
     try {
+      final ready = await _ensureReadyForShipping(order, forEcoTrack: false);
+      if (!ready) return;
+
       // Get Yalidine API token from SharedPreferences
       final prefs = await SharedPreferences.getInstance();
       final yalidineToken = prefs.getString('yalidine_token');
@@ -434,6 +922,10 @@ class HomeScreenState extends State<HomeScreen> {
       }
 
       if (!mounted) return;
+
+      setState(() {
+        _shippingRowsInProgress.add(order.row);
+      });
 
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -459,12 +951,115 @@ class HomeScreenState extends State<HomeScreen> {
       }
     } catch (e) {
       _showError('خطأ Yalidine: $e');
+    } finally {
+      if (!mounted) return;
+      setState(() {
+        _shippingRowsInProgress.remove(order.row);
+      });
+    }
+  }
+
+  Future<bool> _validateAndFixEcoTrackCommune(AppOrder order) async {
+    final wilayaName = order.wilaya.trim();
+    final communeName = order.commune.trim();
+
+    if (wilayaName.isEmpty || communeName.isEmpty) return false;
+
+    // Get wilaya code
+    final wilayaCode = EcoTrackService.wilayaCodes[wilayaName];
+    if (wilayaCode == null) {
+      _showError('الولاية غير معروفة في EcoTrack: $wilayaName');
+      return false;
+    }
+
+    try {
+      // Fetch valid communes from EcoTrack
+      final validCommunes = await EcoTrackService.getCommunes(wilayaCode);
+
+      if (validCommunes.isEmpty) {
+        _showError('لم يتمكن من جلب البلديات من EcoTrack');
+        return false;
+      }
+
+      // Check if commune is already in valid list (case-insensitive)
+      final exactMatch = validCommunes.firstWhere(
+        (c) => c.trim().toLowerCase() == communeName.toLowerCase(),
+        orElse: () => '',
+      );
+
+      if (exactMatch.isNotEmpty) {
+        // Update order with exact match
+        if (order.commune != exactMatch) {
+          setState(() {
+            order.commune = exactMatch;
+          });
+        }
+        return true;
+      }
+
+      // Try fuzzy match
+      final fuzzyMatch = validCommunes.firstWhere(
+        (c) {
+          final clean1 = c.trim().toLowerCase().replaceAll(RegExp(r'\s+'), '');
+          final clean2 = communeName.toLowerCase().replaceAll(RegExp(r'\s+'), '');
+          final matches = clean1.split('').where((char) => clean2.contains(char)).length;
+          final similarity = matches / (clean1.length > clean2.length ? clean1.length : clean2.length);
+          return similarity >= 0.75;
+        },
+        orElse: () => '',
+      );
+
+      if (fuzzyMatch.isNotEmpty) {
+        setState(() {
+          order.commune = fuzzyMatch;
+        });
+        return true;
+      }
+
+      // No automatic match found - ask user to pick from valid communes
+      if (!mounted) return false;
+
+      final selected = await showDialog<String>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('اختر البلدية الصحيحة', textAlign: TextAlign.right),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: ListView.builder(
+              itemCount: validCommunes.length,
+              itemBuilder: (context, index) {
+                return ListTile(
+                  title: Text(validCommunes[index], textAlign: TextAlign.right),
+                  onTap: () => Navigator.pop(context, validCommunes[index]),
+                );
+              },
+            ),
+          ),
+        ),
+      );
+
+      if (selected != null) {
+        setState(() {
+          order.commune = selected;
+        });
+        return true;
+      }
+
+      return false;
+    } catch (e) {
+      _showError('خطأ في التحقق من البلديات: $e');
+      return false;
     }
   }
 
   void _shipWithEcoTrack(AppOrder order) async {
+    if (_shippingRowsInProgress.contains(order.row)) return;
+
     try {
-      // Get EcoTrack API token from SharedPreferences
+      final ready = await _ensureReadyForShipping(order, forEcoTrack: true);
+      if (!ready) return;
+
+      // Get EcoTrack API token from SharedPreferences FIRST
       final prefs = await SharedPreferences.getInstance();
       final ecotrackToken = prefs.getString('ecotrack_token');
 
@@ -473,7 +1068,18 @@ class HomeScreenState extends State<HomeScreen> {
         return;
       }
 
+      // Set token before validating communes
+      EcoTrackService.setApiToken(ecotrackToken);
+
+      // Validate and fix commune against EcoTrack's database
+      final communeOk = await _validateAndFixEcoTrackCommune(order);
+      if (!communeOk) return;
+
       if (!mounted) return;
+
+      setState(() {
+        _shippingRowsInProgress.add(order.row);
+      });
 
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -482,7 +1088,6 @@ class HomeScreenState extends State<HomeScreen> {
         ),
       );
 
-      EcoTrackService.setApiToken(ecotrackToken);
       final trackingNumber = await EcoTrackService.createParcel(order);
 
       if (trackingNumber != null) {
@@ -499,6 +1104,11 @@ class HomeScreenState extends State<HomeScreen> {
       }
     } catch (e) {
       _showError('خطأ EcoTrack: $e');
+    } finally {
+      if (!mounted) return;
+      setState(() {
+        _shippingRowsInProgress.remove(order.row);
+      });
     }
   }
 
@@ -770,7 +1380,9 @@ class HomeScreenState extends State<HomeScreen> {
                         onStatusChange: (newStatus) =>
                             _updateOrderStatus(order, newStatus),
                         onEdit: () => _showEditDialog(order),
-                        onShip: () => _showLogisticsSheet(order),
+                        onShip: _shippingRowsInProgress.contains(order.row)
+                            ? null
+                            : () => _showLogisticsSheet(order),
                       ),
                     ),
                   );
