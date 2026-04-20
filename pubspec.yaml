@@ -43,7 +43,6 @@ dependencies:
   google_sign_in: ^6.2.2
   googleapis: ^16.0.0
   googleapis_auth: ^2.3.0
-  path_provider: ^2.1.1
 
 dev_dependencies:
   flutter_test:
@@ -68,7 +67,7 @@ flutter:
   uses-material-design: true
 
   assets:
-    - algeria_cities.json
+    - communes.json
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images

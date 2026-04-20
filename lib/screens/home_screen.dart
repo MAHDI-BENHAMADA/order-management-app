@@ -64,12 +64,21 @@ class HomeScreenState extends State<HomeScreen> {
 
   Future<void> _loadLocationData() async {
     try {
+      // Load EcoTrack token from SharedPreferences first
+      final prefs = await SharedPreferences.getInstance();
+      final ecotrackToken = prefs.getString('ecotrack_token');
+
+      if (ecotrackToken != null && ecotrackToken.isNotEmpty) {
+        EcoTrackService.setApiToken(ecotrackToken);
+      }
+
       await AlgeriaLocationService.ensureLoaded();
       if (!mounted) return;
       setState(() {
         _locationDataReady = true;
       });
-    } catch (_) {
+    } catch (e) {
+      print('Error loading location data: $e');
       if (!mounted) return;
       setState(() {
         _locationDataReady = false;
@@ -338,23 +347,46 @@ class HomeScreenState extends State<HomeScreen> {
 
     if (_locationDataReady &&
         AlgeriaLocationService.normalizeWilaya(normalized['wilaya']!) == null) {
+      print(
+        '❌ Wilaya validation failed for: "${normalized['wilaya']!}" | LocationDataReady: $_locationDataReady',
+      );
       blocking.add('wilaya');
+    } else if (_locationDataReady) {
+      final normalizedWilaya =
+          AlgeriaLocationService.normalizeWilaya(normalized['wilaya']!);
+      print(
+        '✅ Wilaya normalized: "${normalized['wilaya']!}" → "$normalizedWilaya"',
+      );
     }
 
     if (_locationDataReady &&
         normalized['wilaya']!.isNotEmpty &&
-        normalized['commune']!.isNotEmpty &&
-        !AlgeriaLocationService.isValidCommuneForWilaya(
-          normalized['wilaya']!,
-          normalized['commune']!,
-        )) {
-      blocking.add('commune');
+        normalized['commune']!.isNotEmpty) {
+      // Only validate commune if we have communes loaded for this wilaya
+      final communesForWilaya = AlgeriaLocationService.getCommunesForWilaya(
+        normalized['wilaya']!,
+      );
+      
+      if (communesForWilaya.isNotEmpty &&
+          !AlgeriaLocationService.isValidCommuneForWilaya(
+            normalized['wilaya']!,
+            normalized['commune']!,
+          )) {
+        // Only block if communes were loaded but this one doesn't match
+        blocking.add('commune');
+      } else if (communesForWilaya.isEmpty) {
+        // Communes didn't load (rate limit), but we allow manual entry
+        print('⚠️ Communes not loaded for wilaya, allowing manual entry');
+      }
     }
 
     if (forEcoTrack &&
-        normalized['wilaya']!.isNotEmpty &&
-        !EcoTrackService.wilayaCodes.containsKey(normalized['wilaya']!)) {
-      blocking.add('wilaya');
+        normalized['wilaya']!.isNotEmpty) {
+      // Check if wilaya has a valid code for EcoTrack
+      final wilayaCode = AlgeriaLocationService.getWilayaId(normalized['wilaya']!);
+      if (wilayaCode == null) {
+        blocking.add('wilaya');
+      }
     }
 
     final parsedPrice = int.tryParse(normalized['price']!);
@@ -612,6 +644,13 @@ class HomeScreenState extends State<HomeScreen> {
             final communes = _locationDataReady
                 ? AlgeriaLocationService.getCommunesForWilaya(selectedWilaya)
                 : const <String>[];
+            
+            // Ensure the selected commune is in the communes list for the current wilaya
+            String selectedCommune = communeController.text;
+            if (_locationDataReady && communes.isNotEmpty && !communes.contains(selectedCommune)) {
+              selectedCommune = communes.first;
+              communeController.text = selectedCommune;
+            }
 
             return AlertDialog(
               title: Text(title, textAlign: TextAlign.right),
@@ -645,13 +684,20 @@ class HomeScreenState extends State<HomeScreen> {
                     if (showField('wilaya')) ...[
                       if (_locationDataReady)
                         DropdownButtonFormField<String>(
-                          initialValue: wilayas.contains(selectedWilaya)
+                          value: wilayas.contains(selectedWilaya)
                               ? selectedWilaya
                               : null,
+                          isExpanded: true,
                           items: wilayas
                               .map(
                                 (w) =>
-                                    DropdownMenuItem(value: w, child: Text(w)),
+                                    DropdownMenuItem(
+                                      value: w,
+                                      child: Text(
+                                        w,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
                               )
                               .toList(),
                           onChanged: (value) {
@@ -664,8 +710,10 @@ class HomeScreenState extends State<HomeScreen> {
                                     selectedWilaya,
                                   );
                               if (nextCommunes.isNotEmpty) {
-                                communeController.text = nextCommunes.first;
+                                selectedCommune = nextCommunes.first;
+                                communeController.text = selectedCommune;
                               } else {
+                                selectedCommune = '';
                                 communeController.clear();
                               }
                             });
@@ -689,19 +737,24 @@ class HomeScreenState extends State<HomeScreen> {
                     if (showField('commune')) ...[
                       if (_locationDataReady && communes.isNotEmpty)
                         DropdownButtonFormField<String>(
-                          initialValue:
-                              communes.contains(communeController.text)
-                              ? communeController.text
-                              : communes.first,
+                          value: selectedCommune,
+                          isExpanded: true,
                           items: communes
                               .map(
                                 (c) =>
-                                    DropdownMenuItem(value: c, child: Text(c)),
+                                    DropdownMenuItem(
+                                      value: c,
+                                      child: Text(
+                                        c,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
                               )
                               .toList(),
                           onChanged: (value) {
                             setDialogState(() {
-                              communeController.text = value ?? '';
+                              selectedCommune = value ?? '';
+                              communeController.text = selectedCommune;
                             });
                           },
                           decoration: const InputDecoration(
@@ -966,7 +1019,7 @@ class HomeScreenState extends State<HomeScreen> {
     if (wilayaName.isEmpty || communeName.isEmpty) return false;
 
     // Get wilaya code
-    final wilayaCode = EcoTrackService.wilayaCodes[wilayaName];
+    final wilayaCode = AlgeriaLocationService.getWilayaId(wilayaName);
     if (wilayaCode == null) {
       _showError('الولاية غير معروفة في EcoTrack: $wilayaName');
       return false;
