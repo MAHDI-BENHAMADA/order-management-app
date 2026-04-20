@@ -1,6 +1,7 @@
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import '../models/order.dart';
+import '../utils/algeria_location_service.dart';
 
 class EcoTrackService {
   static const String baseUrl =
@@ -50,63 +51,151 @@ class EcoTrackService {
     }
   }
 
-  // Map Algerian Wilaya names to their numeric codes
-  static const Map<String, int> wilayaCodes = {
-    'الجزائر': 1,
-    'وهران': 2,
-    'قسنطينة': 3,
-    'البليدة': 4,
-    'بوفاريك': 5,
-    'تلمسان': 6,
-    'جيجل': 7,
-    'سيدي بلعباس': 8,
-    'سطيف': 9,
-    'تيارت': 10,
-    'تيزي وزو': 11,
-    'الجلفة': 12,
-    'سعيدة': 13,
-    'سكيكدة': 14,
-    'سيدي عيسى': 15,
-    'الشلف': 16,
-    'البيض': 17,
-    'عنابة': 18,
-    'الأغواط': 19,
-    'قالمة': 20,
-    'قرقرة': 21,
-    'بسكرة': 22,
-    'طبرقة': 23,
-    'تبسة': 24,
-    'برج بوعريريج': 25,
-    'عين الدفلى': 26,
-    'عين تيموشنت': 27,
-    'غرداية': 28,
-    'الحمادية': 29,
-    'درعة و تافيلالت': 30,
-    'الونشريس': 31,
-    'المنيعة': 32,
-    'الأوراس': 34,
-    'الإهقار': 35,
-    'نقادي': 36,
-    'أوليلي': 38,
-    'أدرار': 39,
-    'باتنة': 40,
-    'بني سويف': 41,
-    'بنى هلال': 42,
-    'بوسعادة': 43,
-    'الشقرة': 44,
-    'المسيلة': 45,
-    'عين بوسيف': 46,
-    'أم البواقي': 47,
-    'الواحات': 48,
-    'سباتين': 49,
-    'إليزي': 51,
-    'تمنراست': 52,
-    'الطاسيلي': 53,
-    'عين قزام': 54,
-    'جانت': 55,
-    'إنقوسة': 57,
-    'جاسي': 58,
-  };
+  // Fetch all active wilayas from EcoTrack API
+  static Future<List<Map<String, dynamic>>> getWilayasFromApi() async {
+    if (_apiToken == null) {
+      throw Exception('EcoTrack API Token not set');
+    }
+
+    try {
+      final uri = Uri.parse('$baseUrl/get/wilayas');
+
+      final response = await http
+          .get(
+            uri,
+            headers: {
+              'Authorization': 'Bearer $_apiToken',
+              'Accept': 'application/json',
+            },
+          )
+          .timeout(
+            const Duration(seconds: 10),
+            onTimeout: () => throw Exception('Wilayas request timeout'),
+          );
+
+      print('EcoTrack Wilayas Response Status: ${response.statusCode}');
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        List<Map<String, dynamic>> result = [];
+
+        // Handle response format
+        List<dynamic> wilayasList = [];
+        if (data is List) {
+          wilayasList = data;
+        } else if (data is Map && data['wilayas'] is List) {
+          wilayasList = data['wilayas'];
+        }
+
+        for (var item in wilayasList) {
+          if (item is Map) {
+            result.add(item as Map<String, dynamic>);
+          }
+        }
+
+        print('✅ Fetched ${result.length} wilayas from EcoTrack API');
+        return result;
+      } else {
+        print('Failed to get wilayas: ${response.statusCode}');
+        return [];
+      }
+    } catch (e) {
+      print('Error getting wilayas from API: $e');
+      return [];
+    }
+  }
+
+  // Fetch communes for a specific wilaya by wilaya_id from EcoTrack API with retry logic
+  static Future<List<String>> getCommunesFromApi(int wilayaId) async {
+    if (_apiToken == null) {
+      throw Exception('EcoTrack API Token not set');
+    }
+
+    int retries = 0;
+    const maxRetries = 3;
+    const retryDelay = Duration(seconds: 2);
+
+    while (retries < maxRetries) {
+      try {
+        final uri = Uri.parse('$baseUrl/get/communes?wilaya_id=$wilayaId');
+
+        final response = await http
+            .get(
+              uri,
+              headers: {
+                'Authorization': 'Bearer $_apiToken',
+                'Content-Type': 'application/json',
+              },
+            )
+            .timeout(
+              const Duration(seconds: 10),
+              onTimeout: () => throw Exception('Communes request timeout'),
+            );
+
+        print('EcoTrack Communes Response Status: ${response.statusCode}');
+
+        // Handle rate limiting with retry
+        if (response.statusCode == 429) {
+          retries++;
+          if (retries < maxRetries) {
+            print('⚠️ Rate limited (429), retrying in ${retryDelay.inSeconds}s (attempt $retries/$maxRetries)');
+            await Future.delayed(retryDelay);
+            continue;
+          } else {
+            print('❌ Rate limited after $maxRetries attempts for wilaya $wilayaId');
+            return [];
+          }
+        }
+
+        if (response.statusCode == 200) {
+          final data = jsonDecode(response.body);
+
+          List<String> result = [];
+
+          // Handle two response formats:
+          // 1. Direct array: [{"nom": "Commune1"}, {"nom": "Commune2"}]
+          // 2. Object with communes key: {"communes": [{...}]}
+
+          List<dynamic> communesList = [];
+          if (data is List) {
+            // Direct array format
+            communesList = data;
+          } else if (data is Map && data['communes'] is List) {
+            // Object with communes key
+            communesList = data['communes'];
+          }
+
+          if (communesList.isNotEmpty) {
+            for (var item in communesList) {
+              if (item is Map) {
+                // Extract the nom field
+                final name = item['nom'] ?? item['name'] ?? item['commune'];
+                if (name != null) {
+                  result.add(name.toString());
+                }
+              } else if (item is String) {
+                result.add(item);
+              }
+            }
+            print(
+              '✅ Parsed ${result.length} communes for wilaya $wilayaId: ${result.take(5).join(", ")}...',
+            );
+            return result;
+          }
+
+          return [];
+        } else {
+          print('Failed to get communes: ${response.statusCode}');
+          return [];
+        }
+      } catch (e) {
+        print('Error getting communes from API: $e');
+        return [];
+      }
+    }
+
+    return [];
+  }
 
   // Get valid communes for a wilaya
   static Future<List<String>> getCommunes(int wilayaCode) async {
@@ -240,7 +329,7 @@ class EcoTrackService {
       }
 
       final normalizedWilaya = order.wilaya.trim();
-      final wilayaCode = wilayaCodes[normalizedWilaya];
+      final wilayaCode = AlgeriaLocationService.getWilayaId(normalizedWilaya);
       if (wilayaCode == null) {
         throw Exception(
           'EcoTrack: Invalid wilaya "$normalizedWilaya". Please select a valid wilaya before shipping.',
