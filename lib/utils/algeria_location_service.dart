@@ -181,13 +181,28 @@ class AlgeriaLocationService {
   static int? getWilayaId(String wilaya) {
     if (!_loaded) return null;
 
+    final trimmed = wilaya.trim();
+    if (trimmed.isEmpty) return null;
+
+    // Try to extract ID if it starts with digits (e.g. "16 - Alger" or "16")
+    final idMatch = RegExp(r'^(\d+)').firstMatch(trimmed);
+    if (idMatch != null) {
+      final id = int.tryParse(idMatch.group(1)!);
+      if (id != null) {
+        // Find wilaya with this ID
+        for (final entry in _wilayaNameToId.entries) {
+          if (entry.value == id) return id;
+        }
+      }
+    }
+
     // Try exact match first
-    if (_wilayaNameToId.containsKey(wilaya)) {
-      return _wilayaNameToId[wilaya];
+    if (_wilayaNameToId.containsKey(trimmed)) {
+      return _wilayaNameToId[trimmed];
     }
 
     // Try normalized match
-    final normalized = _normalize(wilaya);
+    final normalized = _normalize(trimmed);
     for (final entry in _wilayaNameToId.entries) {
       if (_normalize(entry.key) == normalized) {
         return entry.value;
@@ -200,31 +215,41 @@ class AlgeriaLocationService {
   static List<String> getCommunesForWilaya(String wilaya) {
     if (!_loaded) return const <String>[];
 
-    // Try exact match first
-    if (_wilayaToCommunes.containsKey(wilaya)) {
-      return List<String>.unmodifiable(_wilayaToCommunes[wilaya] ?? const <String>[]);
-    }
+    final normalizedWilaya = normalizeWilaya(wilaya);
+    if (normalizedWilaya == null) return const <String>[];
 
-    // Try to find by normalized name
-    for (final entry in _wilayaToCommunes.entries) {
-      if (_normalize(entry.key) == _normalize(wilaya)) {
-        return List<String>.unmodifiable(entry.value);
-      }
+    // Try exact match first
+    if (_wilayaToCommunes.containsKey(normalizedWilaya)) {
+      return List<String>.unmodifiable(
+        _wilayaToCommunes[normalizedWilaya] ?? const <String>[],
+      );
     }
 
     return const <String>[];
   }
 
   static String? normalizeWilaya(String value) {
-    if (value.trim().isEmpty) return null;
+    final trimmed = value.trim();
+    if (trimmed.isEmpty) return null;
 
-    // Try exact match first
-    if (_wilayas.contains(value)) {
-      return value;
+    // 1. Try to extract ID and match (handles "16 - Alger", "16 الجزائر", "16")
+    final idMatch = RegExp(r'^(\d+)').firstMatch(trimmed);
+    if (idMatch != null) {
+      final id = int.tryParse(idMatch.group(1)!);
+      if (id != null) {
+        for (final entry in _wilayaNameToId.entries) {
+          if (entry.value == id) return entry.key;
+        }
+      }
     }
 
-    // Try normalized match
-    final normalized = _normalize(value);
+    // 2. Try exact match
+    if (_wilayas.contains(trimmed)) {
+      return trimmed;
+    }
+
+    // 3. Try normalized match (ignoring spaces, case, etc)
+    final normalized = _normalize(trimmed);
     for (final wilaya in _wilayas) {
       if (_normalize(wilaya) == normalized) {
         return wilaya;

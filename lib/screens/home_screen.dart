@@ -3,13 +3,15 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:googleapis/sheets/v4.dart' as sheets;
+import 'package:googleapis/drive/v3.dart' as drive;
 import '../models/order.dart';
+import '../models/shipping_provider.dart';
 import '../widgets/order_card.dart';
+import '../widgets/token_setup_dialog.dart';
 import '../utils/algeria_location_service.dart';
 import '../utils/google_auth_service.dart';
-import '../services/yalidine_service.dart';
 import '../services/ecotrack_service.dart';
-import 'setup_screen.dart';
+import '../services/shipping_provider_factory.dart';
 
 class _ShippingReadiness {
   final Map<String, String> normalizedValues;
@@ -24,7 +26,7 @@ class _ShippingReadiness {
 }
 
 class HomeScreen extends StatefulWidget {
-  final String spreadsheetId;
+  final String? spreadsheetId;
 
   const HomeScreen({super.key, required this.spreadsheetId});
 
@@ -42,6 +44,7 @@ class HomeScreenState extends State<HomeScreen> {
   bool isLoading = true;
   String? filterStatus; // null = show all
   String _searchQuery = '';
+  ShippingProvider _selectedProvider = ShippingProvider.e48hr;
 
   @override
   void initState() {
@@ -64,10 +67,15 @@ class HomeScreenState extends State<HomeScreen> {
 
   Future<void> _loadLocationData() async {
     try {
-      // Load EcoTrack token from SharedPreferences first
-      final prefs = await SharedPreferences.getInstance();
-      final ecotrackToken = prefs.getString('ecotrack_token');
+      // Initialize the ShippingProviderFactory
+      await ShippingProviderFactory.initialize();
 
+      // Load stored provider selection
+      final prefs = await SharedPreferences.getInstance();
+      final providerId = prefs.getString('selected_provider') ?? '48hr';
+      _selectedProvider = ShippingProvider.fromId(providerId);
+
+      final ecotrackToken = prefs.getString('ecotrack_token');
       if (ecotrackToken != null && ecotrackToken.isNotEmpty) {
         EcoTrackService.setApiToken(ecotrackToken);
       }
@@ -87,6 +95,12 @@ class HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> fetchData() async {
+    // If no spreadsheet selected, don't try to fetch
+    if (widget.spreadsheetId == null || widget.spreadsheetId!.isEmpty) {
+      setState(() => isLoading = false);
+      return;
+    }
+
     setState(() => isLoading = true);
     try {
       final api = await GoogleAuthService.getSheetsApi();
@@ -98,7 +112,7 @@ class HomeScreenState extends State<HomeScreen> {
 
       // Read columns A to K.
       final response = await api.spreadsheets.values.get(
-        widget.spreadsheetId,
+        widget.spreadsheetId!,
         'A:K',
       );
       final rows = response.values ?? [];
@@ -138,6 +152,188 @@ class HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  Future<void> _showSheetSelector() async {
+    if (!mounted) return;
+
+    // Show loading dialog
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 32, horizontal: 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const CircularProgressIndicator(color: Color(0xFF10B981), strokeWidth: 3),
+              const SizedBox(height: 24),
+              const Text(
+                'جاري تحميل الجداول...',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'يرجى الانتظار بينما نبحث في ملفاتك',
+                style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    try {
+      final driveApi = await GoogleAuthService.getDriveApi();
+      if (driveApi == null) {
+        if (mounted) Navigator.pop(context);
+        _showError('خطأ: لم يتم الاتصال بـ Google Drive');
+        return;
+      }
+
+      // Fetch all Google Sheets from Drive
+      final fileList = await driveApi.files.list(
+        q: "mimeType='application/vnd.google-apps.spreadsheet'",
+        spaces: 'drive',
+        pageSize: 100,
+      );
+
+      if (mounted) Navigator.pop(context); // Close loading dialog
+
+      final files = fileList.files ?? [];
+
+      if (files.isEmpty) {
+        if (mounted) {
+          _showError('لم يتم العثور على أي جداول Google Sheets');
+        }
+        return;
+      }
+
+      if (!mounted) return;
+
+      // Show sheet selection dialog
+      final selectedFile = await showDialog<drive.File>(
+        context: context,
+        builder: (context) => Dialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+          child: Container(
+            padding: const EdgeInsets.all(20),
+            constraints: const BoxConstraints(maxWidth: 400, maxHeight: 550),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const Icon(Icons.table_chart_rounded, size: 48, color: Color(0xFF10B981)),
+                const SizedBox(height: 16),
+                const Text(
+                  'اختر جدول البيانات',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'اختر ملف Google Sheets لمزامنته مع التطبيق',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(fontSize: 14, color: Colors.black54),
+                ),
+                const SizedBox(height: 20),
+                Flexible(
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: Colors.grey[100],
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    child: ListView.separated(
+                      shrinkWrap: true,
+                      padding: const EdgeInsets.all(8),
+                      itemCount: files.length,
+                      separatorBuilder: (context, index) => const SizedBox(height: 8),
+                      itemBuilder: (context, index) {
+                        final file = files[index];
+                        return InkWell(
+                          onTap: () => Navigator.pop(context, file),
+                          borderRadius: BorderRadius.circular(12),
+                          child: Container(
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(color: Colors.black12),
+                            ),
+                            child: Row(
+                              children: [
+                                Container(
+                                  padding: const EdgeInsets.all(8),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFF10B981).withValues(alpha: 0.1),
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                  child: const Icon(Icons.description, size: 20, color: Color(0xFF10B981)),
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        file.name ?? 'بدون اسم',
+                                        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                      Text(
+                                        file.id ?? '',
+                                        style: TextStyle(fontSize: 10, color: Colors.grey[600]),
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                const Icon(Icons.chevron_right, size: 20, color: Colors.grey),
+                              ],
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  style: TextButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    foregroundColor: Colors.redAccent,
+                  ),
+                  child: const Text('إلغاء'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+
+      if (selectedFile != null && selectedFile.id != null) {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString('spreadsheetId', selectedFile.id!);
+
+        if (!mounted) return;
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(
+            builder: (context) => HomeScreen(spreadsheetId: selectedFile.id!),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        Navigator.pop(context); // Close loading dialog if still open
+        _showError('خطأ عند جلب الجداول: $e');
+      }
+    }
+  }
+
   void _showError(String message) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
@@ -146,13 +342,12 @@ class HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _logout() async {
-    await GoogleAuthService.signOut();
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('spreadsheetId');
     if (mounted) {
       Navigator.pushReplacement(
         context,
-        MaterialPageRoute(builder: (context) => const SetupScreen()),
+        MaterialPageRoute(builder: (context) => const HomeScreen(spreadsheetId: null)),
       );
     }
   }
@@ -225,7 +420,7 @@ class HomeScreenState extends State<HomeScreen> {
 
       await api.spreadsheets.values.update(
         valueRange,
-        widget.spreadsheetId,
+        widget.spreadsheetId!,
         range,
         valueInputOption: 'USER_ENTERED',
       );
@@ -535,7 +730,7 @@ class HomeScreenState extends State<HomeScreen> {
 
       await api.spreadsheets.values.batchUpdate(
         batchUpdate,
-        widget.spreadsheetId,
+        widget.spreadsheetId!,
       );
 
       setState(() {
@@ -635,282 +830,275 @@ class HomeScreenState extends State<HomeScreen> {
 
     final result = await showDialog<bool>(
       context: context,
+      barrierDismissible: false,
       builder: (dialogContext) {
         return StatefulBuilder(
           builder: (dialogContext, setDialogState) {
             final wilayas = _locationDataReady
                 ? AlgeriaLocationService.getWilayas()
                 : const <String>[];
+            
+            // Normalize current wilaya selector
+            String currentWilayaSelection = selectedWilaya;
+            if (_locationDataReady) {
+               currentWilayaSelection = AlgeriaLocationService.normalizeWilaya(selectedWilaya) ?? selectedWilaya;
+            }
+
             final communes = _locationDataReady
-                ? AlgeriaLocationService.getCommunesForWilaya(selectedWilaya)
+                ? AlgeriaLocationService.getCommunesForWilaya(currentWilayaSelection)
                 : const <String>[];
             
-            // Ensure the selected commune is in the communes list for the current wilaya
+            // Sync commune controller with selected item
             String selectedCommune = communeController.text;
             if (_locationDataReady && communes.isNotEmpty && !communes.contains(selectedCommune)) {
               selectedCommune = communes.first;
               communeController.text = selectedCommune;
             }
 
-            return AlertDialog(
-              title: Text(title, textAlign: TextAlign.right),
-              content: SingleChildScrollView(
+            return Dialog(
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+              insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 40),
+              child: Container(
+                constraints: const BoxConstraints(maxWidth: 500),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    if (showField('name')) ...[
-                      TextField(
-                        controller: nameController,
-                        decoration: const InputDecoration(
-                          labelText: 'الاسم الكامل',
-                          border: OutlineInputBorder(),
-                        ),
-                        textDirection: TextDirection.rtl,
+                    // Header
+                    Container(
+                      padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 24),
+                      decoration: const BoxDecoration(
+                        color: Color(0xFF10B981),
+                        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
                       ),
-                      const SizedBox(height: 12),
-                    ],
-                    if (showField('phone')) ...[
-                      TextField(
-                        controller: phoneController,
-                        keyboardType: TextInputType.phone,
-                        decoration: const InputDecoration(
-                          labelText: 'رقم الهاتف',
-                          border: OutlineInputBorder(),
-                        ),
-                        textDirection: TextDirection.ltr,
+                      child: Row(
+                        children: [
+                          const Icon(Icons.edit_note, color: Colors.white, size: 28),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Text(
+                              title,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 20,
+                                fontWeight: FontWeight.bold,
+                              ),
+                              textAlign: TextAlign.right,
+                            ),
+                          ),
+                        ],
                       ),
-                      const SizedBox(height: 12),
-                    ],
-                    if (showField('wilaya')) ...[
-                      if (_locationDataReady)
-                        DropdownButtonFormField<String>(
-                          value: wilayas.contains(selectedWilaya)
-                              ? selectedWilaya
-                              : null,
-                          isExpanded: true,
-                          items: wilayas
-                              .map(
-                                (w) =>
-                                    DropdownMenuItem(
-                                      value: w,
-                                      child: Text(
-                                        w,
-                                        overflow: TextOverflow.ellipsis,
+                    ),
+                    
+                    // Form Content
+                    Flexible(
+                      child: SingleChildScrollView(
+                        padding: const EdgeInsets.fromLTRB(24, 24, 24, 8),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            if (showField('name')) ...[
+                              _buildModernTextField(
+                                controller: nameController,
+                                label: 'الاسم الكامل',
+                                icon: Icons.person_outline,
+                                textDirection: TextDirection.rtl,
+                              ),
+                              const SizedBox(height: 16),
+                            ],
+                            if (showField('phone')) ...[
+                              _buildModernTextField(
+                                controller: phoneController,
+                                label: 'رقم الهاتف',
+                                icon: Icons.phone_android,
+                                keyboardType: TextInputType.phone,
+                                textDirection: TextDirection.ltr,
+                              ),
+                              const SizedBox(height: 16),
+                            ],
+                            if (showField('wilaya')) ...[
+                              _buildWilayaDropdown(
+                                wilayas: wilayas,
+                                selectedValue: currentWilayaSelection,
+                                onChanged: (value) {
+                                  setDialogState(() {
+                                    selectedWilaya = value ?? '';
+                                    wilayaController.text = selectedWilaya;
+                                    
+                                    final nextCommunes = AlgeriaLocationService.getCommunesForWilaya(selectedWilaya);
+                                    if (nextCommunes.isNotEmpty) {
+                                      communeController.text = nextCommunes.first;
+                                    } else {
+                                      communeController.clear();
+                                    }
+                                  });
+                                }
+                              ),
+                              const SizedBox(height: 16),
+                            ],
+                            if (showField('commune')) ...[
+                              _buildCommuneDropdown(
+                                communes: communes,
+                                selectedValue: selectedCommune,
+                                onChanged: (value) {
+                                  setDialogState(() {
+                                    communeController.text = value ?? '';
+                                  });
+                                }
+                              ),
+                              const SizedBox(height: 16),
+                            ],
+                            if (showField('address')) ...[
+                              _buildModernTextField(
+                                controller: addressController,
+                                label: 'العنوان بالتفصيل',
+                                icon: Icons.location_on_outlined,
+                                textDirection: TextDirection.rtl,
+                                maxLines: 2,
+                              ),
+                              const SizedBox(height: 16),
+                            ],
+                            if (showField('product') || showField('price'))
+                              Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  if (showField('product'))
+                                    Expanded(
+                                      flex: 2,
+                                      child: _buildModernTextField(
+                                        controller: productController,
+                                        label: 'المنتج',
+                                        icon: Icons.inventory_2_outlined,
+                                        textDirection: TextDirection.rtl,
                                       ),
                                     ),
-                              )
-                              .toList(),
-                          onChanged: (value) {
-                            setDialogState(() {
-                              selectedWilaya = value ?? '';
-                              wilayaController.text = selectedWilaya;
+                                  if (showField('product') && showField('price'))
+                                    const SizedBox(width: 12),
+                                  if (showField('price'))
+                                    Expanded(
+                                      child: _buildModernTextField(
+                                        controller: priceController,
+                                        label: 'السعر',
+                                        icon: Icons.payments_outlined,
+                                        keyboardType: TextInputType.number,
+                                        textDirection: TextDirection.ltr,
+                                      ),
+                                    ),
+                                ],
+                              ),
+                            const SizedBox(height: 12),
+                          ],
+                        ),
+                      ),
+                    ),
+                    
+                    // Buttons
+                    Padding(
+                      padding: const EdgeInsets.all(24),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: OutlinedButton(
+                              onPressed: () => Navigator.pop(dialogContext, false),
+                              style: OutlinedButton.styleFrom(
+                                padding: const EdgeInsets.symmetric(vertical: 16),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                side: BorderSide(color: Colors.grey[300]!),
+                              ),
+                              child: const Text('إلغاء', style: TextStyle(color: Colors.black87)),
+                            ),
+                          ),
+                          const SizedBox(width: 16),
+                          Expanded(
+                            flex: 2,
+                            child: ElevatedButton(
+                              onPressed: () async {
+                                final data = <String, String>{
+                                  'name': nameController.text.trim(),
+                                  'phone': _normalizePhone(phoneController.text.trim()),
+                                  'wilaya': wilayaController.text.trim(),
+                                  'commune': communeController.text.trim(),
+                                  'address': addressController.text.trim(),
+                                  'product': productController.text.trim(),
+                                  'price': priceController.text.trim(),
+                                };
 
-                              final nextCommunes =
-                                  AlgeriaLocationService.getCommunesForWilaya(
-                                    selectedWilaya,
-                                  );
-                              if (nextCommunes.isNotEmpty) {
-                                selectedCommune = nextCommunes.first;
-                                communeController.text = selectedCommune;
-                              } else {
-                                selectedCommune = '';
-                                communeController.clear();
-                              }
-                            });
-                          },
-                          decoration: const InputDecoration(
-                            labelText: 'الولاية',
-                            border: OutlineInputBorder(),
+                                final missing = <String>[];
+                                for (final field in needed) {
+                                  if ((data[field] ?? '').isEmpty) {
+                                    missing.add(_fieldLabel(field));
+                                  }
+                                }
+
+                                if (showField('phone') && data['phone']!.isNotEmpty) {
+                                  if (!_isValidAlgerianPhone(data['phone']!)) {
+                                    missing.add(_fieldLabel('phone'));
+                                  }
+                                }
+
+                                if (_locationDataReady && showField('wilaya')) {
+                                  final normalizedWilaya = AlgeriaLocationService.normalizeWilaya(data['wilaya']!);
+                                  if (normalizedWilaya == null) {
+                                    missing.add(_fieldLabel('wilaya'));
+                                  } else {
+                                    data['wilaya'] = normalizedWilaya;
+                                  }
+                                }
+
+                                if (_locationDataReady && showField('commune') && data['wilaya']!.isNotEmpty && data['commune']!.isNotEmpty) {
+                                  final normalizedCommune = AlgeriaLocationService.normalizeCommune(data['wilaya']!, data['commune']!);
+                                  if (normalizedCommune == null) {
+                                    missing.add(_fieldLabel('commune'));
+                                  } else {
+                                    data['commune'] = normalizedCommune;
+                                  }
+                                }
+
+                                if (showField('price') && data['price']!.isNotEmpty) {
+                                  final parsed = int.tryParse(data['price']!);
+                                  if (parsed == null || parsed < 0) {
+                                    missing.add(_fieldLabel('price'));
+                                  }
+                                }
+
+                                if (missing.isNotEmpty) {
+                                  _showError('يرجى مراجعة: ${missing.toSet().join('، ')}');
+                                  return;
+                                }
+
+                                final saved = await _updateOrderFields(
+                                  order,
+                                  name: data['name']!.isNotEmpty ? data['name']! : order.name,
+                                  phone: data['phone']!.isNotEmpty ? data['phone']! : order.phone,
+                                  wilaya: data['wilaya']!.isNotEmpty ? data['wilaya']! : order.wilaya,
+                                  commune: data['commune']!.isNotEmpty ? data['commune']! : order.commune,
+                                  address: data['address']!.isNotEmpty ? data['address']! : order.address,
+                                  product: data['product']!.isNotEmpty ? data['product']! : (order.product.isNotEmpty ? order.product : 'طلب'),
+                                  price: data['price']!.isNotEmpty ? data['price']! : (order.price.isNotEmpty ? order.price : '0'),
+                                  showSuccessMessage: showSuccessMessage,
+                                );
+
+                                if (!saved || !dialogContext.mounted) return;
+                                Navigator.pop(dialogContext, true);
+                              },
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: const Color(0xFF10B981),
+                                foregroundColor: Colors.white,
+                                padding: const EdgeInsets.symmetric(vertical: 16),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                elevation: 0,
+                              ),
+                              child: Text(
+                                saveLabel,
+                                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                              ),
+                            ),
                           ),
-                        )
-                      else
-                        TextField(
-                          controller: wilayaController,
-                          decoration: const InputDecoration(
-                            labelText: 'الولاية',
-                            border: OutlineInputBorder(),
-                          ),
-                          textDirection: TextDirection.rtl,
-                        ),
-                      const SizedBox(height: 12),
-                    ],
-                    if (showField('commune')) ...[
-                      if (_locationDataReady && communes.isNotEmpty)
-                        DropdownButtonFormField<String>(
-                          value: selectedCommune,
-                          isExpanded: true,
-                          items: communes
-                              .map(
-                                (c) =>
-                                    DropdownMenuItem(
-                                      value: c,
-                                      child: Text(
-                                        c,
-                                        overflow: TextOverflow.ellipsis,
-                                      ),
-                                    ),
-                              )
-                              .toList(),
-                          onChanged: (value) {
-                            setDialogState(() {
-                              selectedCommune = value ?? '';
-                              communeController.text = selectedCommune;
-                            });
-                          },
-                          decoration: const InputDecoration(
-                            labelText: 'البلدية',
-                            border: OutlineInputBorder(),
-                          ),
-                        )
-                      else
-                        TextField(
-                          controller: communeController,
-                          decoration: const InputDecoration(
-                            labelText: 'البلدية',
-                            border: OutlineInputBorder(),
-                          ),
-                          textDirection: TextDirection.rtl,
-                        ),
-                      const SizedBox(height: 12),
-                    ],
-                    if (showField('address')) ...[
-                      TextField(
-                        controller: addressController,
-                        decoration: const InputDecoration(
-                          labelText: 'العنوان',
-                          border: OutlineInputBorder(),
-                        ),
-                        textDirection: TextDirection.rtl,
-                        maxLines: 3,
+                        ],
                       ),
-                      const SizedBox(height: 12),
-                    ],
-                    if (showField('product')) ...[
-                      TextField(
-                        controller: productController,
-                        decoration: const InputDecoration(
-                          labelText: 'المنتج',
-                          border: OutlineInputBorder(),
-                        ),
-                        textDirection: TextDirection.rtl,
-                      ),
-                      const SizedBox(height: 12),
-                    ],
-                    if (showField('price'))
-                      TextField(
-                        controller: priceController,
-                        keyboardType: TextInputType.number,
-                        decoration: const InputDecoration(
-                          labelText: 'السعر',
-                          border: OutlineInputBorder(),
-                        ),
-                        textDirection: TextDirection.ltr,
-                      ),
+                    ),
                   ],
                 ),
               ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(dialogContext, false),
-                  child: const Text('إلغاء'),
-                ),
-                TextButton(
-                  onPressed: () async {
-                    final data = <String, String>{
-                      'name': nameController.text.trim(),
-                      'phone': _normalizePhone(phoneController.text.trim()),
-                      'wilaya': wilayaController.text.trim(),
-                      'commune': communeController.text.trim(),
-                      'address': addressController.text.trim(),
-                      'product': productController.text.trim(),
-                      'price': priceController.text.trim(),
-                    };
-
-                    final missing = <String>[];
-                    for (final field in needed) {
-                      if ((data[field] ?? '').isEmpty) {
-                        missing.add(_fieldLabel(field));
-                      }
-                    }
-
-                    if (showField('phone') && data['phone']!.isNotEmpty) {
-                      if (!_isValidAlgerianPhone(data['phone']!)) {
-                        missing.add(_fieldLabel('phone'));
-                      }
-                    }
-
-                    if (_locationDataReady && showField('wilaya')) {
-                      final normalizedWilaya =
-                          AlgeriaLocationService.normalizeWilaya(
-                            data['wilaya']!,
-                          );
-                      if (normalizedWilaya == null) {
-                        missing.add(_fieldLabel('wilaya'));
-                      } else {
-                        data['wilaya'] = normalizedWilaya;
-                      }
-                    }
-
-                    if (_locationDataReady &&
-                        showField('commune') &&
-                        data['wilaya']!.isNotEmpty &&
-                        data['commune']!.isNotEmpty) {
-                      final normalizedCommune =
-                          AlgeriaLocationService.normalizeCommune(
-                            data['wilaya']!,
-                            data['commune']!,
-                          );
-                      if (normalizedCommune == null) {
-                        missing.add(_fieldLabel('commune'));
-                      } else {
-                        data['commune'] = normalizedCommune;
-                      }
-                    }
-
-                    if (showField('price') && data['price']!.isNotEmpty) {
-                      final parsed = int.tryParse(data['price']!);
-                      if (parsed == null || parsed < 0) {
-                        missing.add(_fieldLabel('price'));
-                      }
-                    }
-
-                    if (missing.isNotEmpty) {
-                      _showError('يرجى مراجعة: ${missing.toSet().join('، ')}');
-                      return;
-                    }
-
-                    final saved = await _updateOrderFields(
-                      order,
-                      name: data['name']!.isNotEmpty
-                          ? data['name']!
-                          : order.name,
-                      phone: data['phone']!.isNotEmpty
-                          ? data['phone']!
-                          : order.phone,
-                      wilaya: data['wilaya']!.isNotEmpty
-                          ? data['wilaya']!
-                          : order.wilaya,
-                      commune: data['commune']!.isNotEmpty
-                          ? data['commune']!
-                          : order.commune,
-                      address: data['address']!.isNotEmpty
-                          ? data['address']!
-                          : order.address,
-                      product: data['product']!.isNotEmpty
-                          ? data['product']!
-                          : (order.product.isNotEmpty ? order.product : 'طلب'),
-                      price: data['price']!.isNotEmpty
-                          ? data['price']!
-                          : (order.price.isNotEmpty ? order.price : '0'),
-                      showSuccessMessage: showSuccessMessage,
-                    );
-
-                    if (!saved || !dialogContext.mounted) return;
-                    Navigator.pop(dialogContext, true);
-                  },
-                  child: Text(saveLabel),
-                ),
-              ],
             );
           },
         );
@@ -920,75 +1108,163 @@ class HomeScreenState extends State<HomeScreen> {
     return result ?? false;
   }
 
-  void _showLogisticsSheet(AppOrder order) {
-    if (_shippingRowsInProgress.contains(order.row)) return;
+  Widget _buildModernTextField({
+    required TextEditingController controller,
+    required String label,
+    required IconData icon,
+    TextInputType? keyboardType,
+    TextDirection? textDirection,
+    int maxLines = 1,
+  }) {
+    return TextField(
+      controller: controller,
+      keyboardType: keyboardType,
+      maxLines: maxLines,
+      textDirection: textDirection,
+      decoration: InputDecoration(
+        labelText: label,
+        prefixIcon: Icon(icon, size: 20, color: Colors.black45),
+        filled: true,
+        fillColor: Colors.grey[50],
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide(color: Colors.grey[200]!),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide(color: Colors.grey[200]!),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(color: Color(0xFF10B981), width: 2),
+        ),
+        labelStyle: const TextStyle(fontSize: 14, color: Colors.black54),
+      ),
+    );
+  }
 
-    showModalBottomSheet(
-      context: context,
-      builder: (context) => Container(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Text(
-              'اختر شركة التوصيل',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 20),
-            ListTile(
-              leading: const Icon(Icons.local_shipping),
-              title: const Text('Yalidine'),
-              onTap: () {
-                Navigator.pop(context);
-                _shipWithYalidine(order);
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.local_shipping),
-              title: const Text('EcoTrack'),
-              onTap: () {
-                Navigator.pop(context);
-                _shipWithEcoTrack(order);
-              },
-            ),
-          ],
+  Widget _buildWilayaDropdown({
+    required List<String> wilayas,
+    required String? selectedValue,
+    required ValueChanged<String?> onChanged,
+  }) {
+    return DropdownButtonFormField<String>(
+      value: wilayas.contains(selectedValue) ? selectedValue : null,
+      isExpanded: true,
+      hint: const Text('اختر الولاية'),
+      items: wilayas.map((w) => DropdownMenuItem(value: w, child: Text(w, overflow: TextOverflow.ellipsis))).toList(),
+      onChanged: onChanged,
+      decoration: InputDecoration(
+        labelText: 'الولاية',
+        prefixIcon: const Icon(Icons.map_outlined, size: 20, color: Colors.black45),
+        filled: true,
+        fillColor: Colors.grey[50],
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide(color: Colors.grey[200]!),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide(color: Colors.grey[200]!),
         ),
       ),
     );
   }
 
-  void _shipWithYalidine(AppOrder order) async {
+  Widget _buildCommuneDropdown({
+    required List<String> communes,
+    required String? selectedValue,
+    required ValueChanged<String?> onChanged,
+  }) {
+    if (!_locationDataReady || communes.isEmpty) {
+      // Fallback to text field if no communes loaded
+      return _buildModernTextField(
+        controller: TextEditingController(text: selectedValue),
+        label: 'البلدية',
+        icon: Icons.location_city_outlined,
+        textDirection: TextDirection.rtl,
+      );
+    }
+
+    return DropdownButtonFormField<String>(
+      value: communes.contains(selectedValue) ? selectedValue : (communes.isNotEmpty ? communes.first : null),
+      isExpanded: true,
+      items: communes.map((c) => DropdownMenuItem(value: c, child: Text(c, overflow: TextOverflow.ellipsis))).toList(),
+      onChanged: onChanged,
+      decoration: InputDecoration(
+        labelText: 'البلدية',
+        prefixIcon: const Icon(Icons.location_city_outlined, size: 20, color: Colors.black45),
+        filled: true,
+        fillColor: Colors.grey[50],
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide(color: Colors.grey[200]!),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide(color: Colors.grey[200]!),
+        ),
+      ),
+    );
+  }
+
+  }
+
+  /// Unified shipping method that handles all provider types
+  void _shipWithSelectedProvider(AppOrder order) async {
     if (_shippingRowsInProgress.contains(order.row)) return;
 
     try {
-      final ready = await _ensureReadyForShipping(order, forEcoTrack: false);
+      // Determine if we need EcoTrack-specific validation
+      final isEcoTrack = _selectedProvider.integrationType == 'ecotrack';
+      final ready = await _ensureReadyForShipping(order, forEcoTrack: isEcoTrack);
       if (!ready) return;
 
-      // Get Yalidine API token from SharedPreferences
-      final prefs = await SharedPreferences.getInstance();
-      final yalidineToken = prefs.getString('yalidine_token');
-
-      if (yalidineToken == null || yalidineToken.isEmpty) {
-        _showError('خطأ: لم يتم حفظ رمز Yalidine. يرجى تحديثه في الإعدادات.');
-        return;
+      // Validate and fix commune for EcoTrack providers
+      if (isEcoTrack) {
+        final communeOk = await _validateAndFixEcoTrackCommune(order);
+        if (!communeOk) return;
       }
 
       if (!mounted) return;
+
+      // Get the appropriate API token from SharedPreferences
+      final prefs = await SharedPreferences.getInstance();
+      final tokenKey = _getTokenKeyForProvider(_selectedProvider);
+      final apiToken = prefs.getString(tokenKey);
+
+      // If token is missing, show dialog to enter it
+      if (apiToken == null || apiToken.isEmpty) {
+        if (!mounted) return;
+        showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (context) => TokenSetupDialog(
+            provider: _selectedProvider,
+            onTokenSaved: () {
+              // Retry shipping after token is saved
+              _shipWithSelectedProvider(order);
+            },
+          ),
+        );
+        return;
+      }
 
       setState(() {
         _shippingRowsInProgress.add(order.row);
       });
 
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('جاري إرسال الطلب إلى Yalidine...'),
-          duration: Duration(seconds: 2),
+        SnackBar(
+          content: Text('جاري إرسال الطلب إلى ${_selectedProvider.displayName}...'),
+          duration: const Duration(seconds: 2),
         ),
       );
 
-      YalidineService.setApiToken(yalidineToken);
-      final trackingNumber = await YalidineService.createShipment(order);
+      // Use the factory to create shipment with selected provider
+      final trackingNumber = await ShippingProviderFactory
+          .createShipmentWithSelectedProvider(order, apiToken);
 
       if (trackingNumber != null) {
         await _updateTrackingAndStatus(order, trackingNumber, 'uploaded');
@@ -1003,13 +1279,24 @@ class HomeScreenState extends State<HomeScreen> {
         }
       }
     } catch (e) {
-      _showError('خطأ Yalidine: $e');
+      _showError('خطأ ${_selectedProvider.displayName}: $e');
     } finally {
       if (!mounted) return;
       setState(() {
         _shippingRowsInProgress.remove(order.row);
       });
     }
+  }
+
+  /// Map provider to SharedPreferences token key
+  String _getTokenKeyForProvider(ShippingProvider provider) {
+    return switch (provider.integrationType) {
+      'ecotrack' => 'ecotrack_token',
+      'yalidine' => 'yalidine_token',
+      'yalitec' => 'yalitec_token',
+      'procolis' => 'procolis_token',
+      _ => 'ecotrack_token', // fallback
+    };
   }
 
   Future<bool> _validateAndFixEcoTrackCommune(AppOrder order) async {
@@ -1105,66 +1392,6 @@ class HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  void _shipWithEcoTrack(AppOrder order) async {
-    if (_shippingRowsInProgress.contains(order.row)) return;
-
-    try {
-      final ready = await _ensureReadyForShipping(order, forEcoTrack: true);
-      if (!ready) return;
-
-      // Get EcoTrack API token from SharedPreferences FIRST
-      final prefs = await SharedPreferences.getInstance();
-      final ecotrackToken = prefs.getString('ecotrack_token');
-
-      if (ecotrackToken == null || ecotrackToken.isEmpty) {
-        _showError('خطأ: لم يتم حفظ رمز EcoTrack. يرجى تحديثه في الإعدادات.');
-        return;
-      }
-
-      // Set token before validating communes
-      EcoTrackService.setApiToken(ecotrackToken);
-
-      // Validate and fix commune against EcoTrack's database
-      final communeOk = await _validateAndFixEcoTrackCommune(order);
-      if (!communeOk) return;
-
-      if (!mounted) return;
-
-      setState(() {
-        _shippingRowsInProgress.add(order.row);
-      });
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('جاري إرسال الطلب إلى EcoTrack...'),
-          duration: Duration(seconds: 2),
-        ),
-      );
-
-      final trackingNumber = await EcoTrackService.createParcel(order);
-
-      if (trackingNumber != null) {
-        await _updateTrackingAndStatus(order, trackingNumber, 'uploaded');
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('تم الإرسال بنجاح! رقم التتبع: $trackingNumber'),
-              backgroundColor: const Color(0xFF10B981),
-              duration: const Duration(seconds: 3),
-            ),
-          );
-        }
-      }
-    } catch (e) {
-      _showError('خطأ EcoTrack: $e');
-    } finally {
-      if (!mounted) return;
-      setState(() {
-        _shippingRowsInProgress.remove(order.row);
-      });
-    }
-  }
-
   Future<void> _updateTrackingAndStatus(
     AppOrder order,
     String newTrackingNumber,
@@ -1202,7 +1429,7 @@ class HomeScreenState extends State<HomeScreen> {
 
       await api.spreadsheets.values.batchUpdate(
         batchUpdate,
-        widget.spreadsheetId,
+        widget.spreadsheetId!,
       );
     } catch (e) {
       // Revert if API fails
@@ -1216,6 +1443,49 @@ class HomeScreenState extends State<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // If no spreadsheet selected, show sheet selector
+    if (widget.spreadsheetId == null || widget.spreadsheetId!.isEmpty) {
+      return Scaffold(
+        appBar: AppBar(
+          title: const Text('اختر جدول'),
+        ),
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24.0),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const Icon(Icons.table_chart, size: 80, color: Color(0xFF10B981)),
+                const SizedBox(height: 24),
+                const Text(
+                  'لم يتم اختيار جدول',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 12),
+                const Text(
+                  'اختر جدول Google Sheets لإدارة الطلبات',
+                  style: TextStyle(fontSize: 14, color: Colors.black54),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 32),
+                ElevatedButton.icon(
+                  onPressed: _showSheetSelector,
+                  icon: const Icon(Icons.add),
+                  label: const Text('إضافة جدول'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF10B981),
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
     final filteredOrders = _getFilteredOrders();
     final totalOrders = allOrders.length;
     final statusCounts = _buildStatusCounts();
@@ -1237,7 +1507,7 @@ class HomeScreenState extends State<HomeScreen> {
             icon: const Icon(Icons.logout),
             onPressed: _logout,
             color: Colors.redAccent,
-            tooltip: 'تغيير الرابط',
+            tooltip: 'تغيير الجدول',
           ),
         ],
       ),
@@ -1276,6 +1546,66 @@ class HomeScreenState extends State<HomeScreen> {
         padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
         child: Column(
           children: [
+            // Provider Selector Dropdown
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Expanded(
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                    decoration: BoxDecoration(
+                      border: Border.all(color: Colors.grey[300]!),
+                      borderRadius: BorderRadius.circular(8),
+                      color: const Color(0xFFF7F7F7),
+                    ),
+                    child: DropdownButton<ShippingProvider>(
+                      value: _selectedProvider,
+                      isExpanded: true,
+                      underline: const SizedBox(), // Remove default underline
+                      items: ShippingProvider.values.map((provider) {
+                        return DropdownMenuItem(
+                          value: provider,
+                          child: Row(
+                            children: [
+                              const Icon(Icons.local_shipping, size: 18),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  provider.displayName,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                      }).toList(),
+                      onChanged: (provider) async {
+                        if (provider != null) {
+                          setState(() {
+                            _selectedProvider = provider;
+                          });
+                          // Update SharedPreferences
+                          await ShippingProviderFactory
+                              .setSelectedProvider(provider);
+                          
+                          if (mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text(
+                                  'تم تحديد ${provider.displayName} كشركة التوصيل الافتراضية',
+                                ),
+                                duration: const Duration(seconds: 2),
+                              ),
+                            );
+                          }
+                        }
+                      },
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
             TextField(
               controller: _searchController,
               textDirection: TextDirection.rtl,
@@ -1435,7 +1765,7 @@ class HomeScreenState extends State<HomeScreen> {
                         onEdit: () => _showEditDialog(order),
                         onShip: _shippingRowsInProgress.contains(order.row)
                             ? null
-                            : () => _showLogisticsSheet(order),
+                            : () => _shipWithSelectedProvider(order),
                       ),
                     ),
                   );

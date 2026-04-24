@@ -1,11 +1,13 @@
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:googleapis/sheets/v4.dart' as sheets;
+import 'package:googleapis/drive/v3.dart' as drive;
 import 'google_auth_client.dart';
 
 class GoogleAuthService {
   static final GoogleSignIn _googleSignIn = GoogleSignIn(
     scopes: [
       sheets.SheetsApi.spreadsheetsScope, // Request permission to read/write spreadsheets
+      drive.DriveApi.driveReadonlyScope, // Request permission to read files from Drive
     ],
   );
 
@@ -37,5 +39,23 @@ class GoogleAuthService {
     final authHeaders = await account.authHeaders;
     final client = GoogleAuthClient(authHeaders);
     return sheets.SheetsApi(client);
+  }
+
+  static Future<drive.DriveApi?> getDriveApi() async {
+    // Try to get current user, or attempt a silent sign-in if returning to the app
+    GoogleSignInAccount? account = _googleSignIn.currentUser;
+    if (account == null) {
+      try {
+        account = await _googleSignIn.signInSilently();
+      } catch (e) {
+        return null;
+      }
+    }
+    
+    if (account == null) return null;
+
+    final authHeaders = await account.authHeaders;
+    final client = GoogleAuthClient(authHeaders);
+    return drive.DriveApi(client);
   }
 }
