@@ -4,13 +4,23 @@ import '../models/order.dart';
 import '../utils/algeria_location_service.dart';
 
 class EcoTrackService {
-  static const String baseUrl =
-      'https://48hr.ecotrack.dz/api/v1'; // Updated to account-specific domain
+  static String _baseUrl = 'https://48hr.ecotrack.dz/api/v1'; // Default provider
   static String? _apiToken;
 
+  /// Set the API token for authentication
   static void setApiToken(String token) {
     _apiToken = token;
   }
+
+  /// Set the base URL for the EcoTrack provider (dynamic provider selection)
+  /// Example: 'https://areex.ecotrack.dz/api/v1' for Areex provider
+  static void setBaseUrl(String url) {
+    _baseUrl = url;
+    print('✅ EcoTrack Base URL updated to: $_baseUrl');
+  }
+
+  /// Get the current base URL
+  static String getBaseUrl() => _baseUrl;
 
   static Future<bool> validateToken() async {
     if (_apiToken == null) {
@@ -18,7 +28,7 @@ class EcoTrackService {
     }
 
     try {
-      final uri = Uri.parse('$baseUrl/get/wilayas');
+      final uri = Uri.parse('$_baseUrl/get/wilayas');
 
       print('Validating EcoTrack Token via: $uri');
 
@@ -58,7 +68,7 @@ class EcoTrackService {
     }
 
     try {
-      final uri = Uri.parse('$baseUrl/get/wilayas');
+      final uri = Uri.parse('$_baseUrl/get/wilayas');
 
       final response = await http
           .get(
@@ -117,7 +127,7 @@ class EcoTrackService {
 
     while (retries < maxRetries) {
       try {
-        final uri = Uri.parse('$baseUrl/get/communes?wilaya_id=$wilayaId');
+        final uri = Uri.parse('$_baseUrl/get/communes?wilaya_id=$wilayaId');
 
         final response = await http
             .get(
@@ -204,7 +214,7 @@ class EcoTrackService {
     }
 
     try {
-      final uri = Uri.parse('$baseUrl/get/communes/$wilayaCode');
+      final uri = Uri.parse('$_baseUrl/get/communes/$wilayaCode');
 
       final response = await http
           .get(
@@ -274,7 +284,7 @@ class EcoTrackService {
     }
 
     try {
-      final uri = Uri.parse('$baseUrl/get/fees');
+      final uri = Uri.parse('$_baseUrl/get/fees');
 
       final response = await http
           .get(
@@ -422,7 +432,7 @@ class EcoTrackService {
         'type': 1, // 1 = Livraison
       };
 
-      final uri = Uri.parse('$baseUrl/create/order');
+      final uri = Uri.parse('$_baseUrl/create/order');
 
       print('EcoTrack Request URL: $uri');
       print('EcoTrack Payload: $payload');
