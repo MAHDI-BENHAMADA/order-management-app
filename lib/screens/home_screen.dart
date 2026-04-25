@@ -47,8 +47,6 @@ class HomeScreenState extends State<HomeScreen> {
   ShippingProvider _selectedProvider = ShippingProvider.e48hr;
   String _defaultPrice = '';
   String _defaultProduct = '';
-  bool _bulkMode = false;
-  final Set<int> _selectedForBulk = <int>{};
 
   @override
   void initState() {
@@ -1505,14 +1503,10 @@ class HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  /// Bulk ship all selected confirmed orders sequentially
-  Future<void> _bulkShipSelected() async {
-    final ordersToShip = allOrders
-        .where((o) => _selectedForBulk.contains(o.row) && o.status == 'confirm')
-        .toList();
-
+  /// Bulk ship all visible confirmed orders with real-time visual tracking
+  Future<void> _startOneClickBulkShip(List<AppOrder> ordersToShip) async {
     if (ordersToShip.isEmpty) {
-      _showError('لا توجد طلبات مؤكدة محددة للشحن');
+      _showError('لا توجد طلبات مؤكدة للشحن في القائمة الحالية');
       return;
     }
 
@@ -1533,11 +1527,11 @@ class HomeScreenState extends State<HomeScreen> {
                   color: const Color(0xFF0066CC).withValues(alpha: 0.1),
                   shape: BoxShape.circle,
                 ),
-                child: const Icon(Icons.local_shipping_rounded, size: 40, color: Color(0xFF0066CC)),
+                child: const Icon(Icons.rocket_launch, size: 40, color: Color(0xFF0066CC)),
               ),
               const SizedBox(height: 20),
               const Text(
-                'شحن جماعي',
+                'شحن بضغطة زر',
                 style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
               ),
               const SizedBox(height: 12),
@@ -1546,12 +1540,12 @@ class HomeScreenState extends State<HomeScreen> {
                 text: TextSpan(
                   style: TextStyle(fontSize: 15, color: Colors.grey[700]),
                   children: [
-                    const TextSpan(text: 'سيتم إرسال '),
+                    const TextSpan(text: 'سيتم تحويل '),
                     TextSpan(
                       text: '${ordersToShip.length}',
                       style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF0066CC)),
                     ),
-                    TextSpan(text: ' طلب إلى ${_selectedProvider.displayName}'),
+                    TextSpan(text: ' طلب مؤكد إلى ${_selectedProvider.displayName} مباشرة.'),
                   ],
                 ),
               ),
@@ -1574,8 +1568,8 @@ class HomeScreenState extends State<HomeScreen> {
                     flex: 2,
                     child: ElevatedButton.icon(
                       onPressed: () => Navigator.pop(ctx, true),
-                      icon: const Icon(Icons.rocket_launch, size: 18),
-                      label: const Text('ابدأ الشحن', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                      icon: const Icon(Icons.check, size: 18),
+                      label: const Text('أكّد الشحن', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
                       style: ElevatedButton.styleFrom(
                         backgroundColor: const Color(0xFF0066CC),
                         foregroundColor: Colors.white,
@@ -1595,94 +1589,196 @@ class HomeScreenState extends State<HomeScreen> {
 
     if (confirmed != true || !mounted) return;
 
-    int successCount = 0;
-    int failCount = 0;
-
-    // Show progress snackbar
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('جاري شحن ${ordersToShip.length} طلب...'),
-        duration: const Duration(seconds: 2),
-        backgroundColor: const Color(0xFF0066CC),
+    // Show Progress Dialog
+    final ValueNotifier<int> processedCountNotifier = ValueNotifier<int>(0);
+    final ValueNotifier<String> currentOrderNameNotifier = ValueNotifier<String>('');
+    
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: ValueListenableBuilder<int>(
+            valueListenable: processedCountNotifier,
+            builder: (context, processedCount, child) {
+              return Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const CircularProgressIndicator(color: Color(0xFF0066CC)),
+                  const SizedBox(height: 24),
+                  const Text('جاري الشحن...', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 12),
+                  Text(
+                    '$processedCount / ${ordersToShip.length}',
+                    style: const TextStyle(fontSize: 20, color: Color(0xFF0066CC), fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 12),
+                  ValueListenableBuilder<String>(
+                    valueListenable: currentOrderNameNotifier,
+                    builder: (context, name, child) {
+                      return Text(name.isNotEmpty ? 'معالجة: $name' : '', style: TextStyle(color: Colors.grey[600]), maxLines: 1, overflow: TextOverflow.ellipsis);
+                    }
+                  ),
+                  const SizedBox(height: 20),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: LinearProgressIndicator(
+                      value: ordersToShip.isEmpty ? 0 : processedCount / ordersToShip.length,
+                      backgroundColor: Colors.grey[200],
+                      color: const Color(0xFF0066CC),
+                      minHeight: 8,
+                    ),
+                  ),
+                ],
+              );
+            },
+          ),
+        ),
       ),
     );
 
+    int successCount = 0;
+    int failCount = 0;
+
     for (final order in ordersToShip) {
       if (!mounted) break;
+      
+      currentOrderNameNotifier.value = order.name.isNotEmpty ? order.name : 'طلب #${order.row}';
+      
       try {
         final isEcoTrack = _selectedProvider.integrationType == 'ecotrack';
         final readiness = _buildShippingReadiness(order, forEcoTrack: isEcoTrack);
 
         if (!readiness.isReady) {
           failCount++;
-          continue;
-        }
-
-        if (_hasNormalizedChanges(order, readiness.normalizedValues)) {
-          final saved = await _saveNormalizedValues(order, readiness.normalizedValues);
-          if (!saved) {
-            failCount++;
-            continue;
-          }
-        }
-
-        if (isEcoTrack) {
-          final communeOk = await _validateAndFixEcoTrackCommune(order);
-          if (!communeOk) {
-            failCount++;
-            continue;
-          }
-        }
-
-        final prefs = await SharedPreferences.getInstance();
-        final tokenKey = _getTokenKeyForProvider(_selectedProvider);
-        final apiToken = prefs.getString(tokenKey);
-        if (apiToken == null || apiToken.isEmpty) {
-          _showError('لم يتم إعداد رمز API لـ ${_selectedProvider.displayName}');
-          break;
-        }
-
-        setState(() {
-          _shippingRowsInProgress.add(order.row);
-        });
-
-        final trackingNumber = await ShippingProviderFactory
-            .createShipmentWithSelectedProvider(order, apiToken);
-
-        if (trackingNumber != null) {
-          await _updateTrackingAndStatus(order, trackingNumber, 'uploaded');
-          successCount++;
         } else {
-          failCount++;
+          bool canShip = true;
+          if (_hasNormalizedChanges(order, readiness.normalizedValues)) {
+            final saved = await _saveNormalizedValues(order, readiness.normalizedValues);
+            if (!saved) canShip = false;
+          }
+
+          if (canShip && isEcoTrack) {
+            final communeOk = await _validateAndFixEcoTrackCommune(order);
+            if (!communeOk) canShip = false;
+          }
+
+          if (canShip) {
+            final prefs = await SharedPreferences.getInstance();
+            final tokenKey = _getTokenKeyForProvider(_selectedProvider);
+            final apiToken = prefs.getString(tokenKey);
+            
+            if (apiToken != null && apiToken.isNotEmpty) {
+              setState(() => _shippingRowsInProgress.add(order.row));
+              
+              final trackingNumber = await ShippingProviderFactory
+                  .createShipmentWithSelectedProvider(order, apiToken);
+                  
+              if (trackingNumber != null) {
+                await _updateTrackingAndStatus(order, trackingNumber, 'uploaded');
+                successCount++;
+              } else {
+                failCount++;
+              }
+            } else {
+              failCount++;
+            }
+          } else {
+            failCount++;
+          }
         }
       } catch (e) {
         failCount++;
       } finally {
-        if (mounted) {
-          setState(() {
-            _shippingRowsInProgress.remove(order.row);
-          });
-        }
+        if (mounted) setState(() => _shippingRowsInProgress.remove(order.row));
       }
+      
+      processedCountNotifier.value++;
+    }
+
+    // Close progress dialog
+    if (mounted && Navigator.canPop(context)) {
+      Navigator.pop(context);
     }
 
     if (!mounted) return;
 
-    // Exit bulk mode
-    setState(() {
-      _bulkMode = false;
-      _selectedForBulk.clear();
-    });
-
-    // Final result notification
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          'تم شحن $successCount طلب بنجاح'
-          '${failCount > 0 ? ' • فشل $failCount' : ''}',
+    // Show final summary dialog
+    showDialog(
+      context: context,
+      builder: (ctx) => Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        child: Container(
+          padding: const EdgeInsets.all(24),
+          constraints: const BoxConstraints(maxWidth: 400),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                failCount == 0 ? Icons.check_circle_rounded : Icons.info_outline_rounded,
+                size: 60,
+                color: failCount == 0 ? const Color(0xFF10B981) : Colors.orange,
+              ),
+              const SizedBox(height: 16),
+              const Text(
+                'اكتملت العملية',
+                style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 20),
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.grey[50],
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.grey[200]!),
+                ),
+                child: Column(
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text('نُفذت بنجاح:', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                        Text('$successCount', style: const TextStyle(fontSize: 18, color: Color(0xFF10B981), fontWeight: FontWeight.bold)),
+                      ],
+                    ),
+                    if (failCount > 0) ...[
+                      const Divider(height: 24),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text('فشلت:', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                          Text('$failCount', style: const TextStyle(fontSize: 18, color: Colors.red, fontWeight: FontWeight.bold)),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      const Text(
+                        'سبب الفشل عادة يكون بيانات ناقصة (لا توجد ولاية، بلدية، أو رقم هاتف غير صحيح) يرجى مراجعتها وتصحيحها.',
+                        style: TextStyle(fontSize: 13, color: Colors.grey, height: 1.4),
+                        textAlign: TextAlign.center,
+                      )
+                    ]
+                  ],
+                ),
+              ),
+              const SizedBox(height: 24),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF0066CC),
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
+                  child: const Text('حسناً', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                ),
+              ),
+            ],
+          ),
         ),
-        backgroundColor: failCount == 0 ? const Color(0xFF10B981) : Colors.orange,
-        duration: const Duration(seconds: 4),
       ),
     );
   }
@@ -1933,9 +2029,7 @@ class HomeScreenState extends State<HomeScreen> {
                   visibleOrders: filteredOrders.length,
                   statusCounts: statusCounts,
                 ),
-                // Bulk action bar
-                if (_bulkMode)
-                  _buildBulkActionBar(filteredOrders),
+
                 Expanded(
                   child: RefreshIndicator(
                     onRefresh: fetchData,
@@ -1945,24 +2039,16 @@ class HomeScreenState extends State<HomeScreen> {
                 ),
               ],
             ),
-      // Bulk ship FAB — only visible on confirm tab with orders
-      floatingActionButton: !_bulkMode && filterStatus == 'confirm' && (statusCounts['confirm'] ?? 0) > 0
+      // Ship all visible confirmed orders
+      floatingActionButton: filterStatus == 'confirm' && (statusCounts['confirm'] ?? 0) > 0
           ? FloatingActionButton.extended(
               onPressed: () {
-                setState(() {
-                  _bulkMode = true;
-                  _selectedForBulk.clear();
-                  // Auto-select all visible confirmed orders
-                  for (final order in filteredOrders) {
-                    if (order.status == 'confirm') {
-                      _selectedForBulk.add(order.row);
-                    }
-                  }
-                });
+                final ordersToShip = filteredOrders.where((o) => o.status == 'confirm').toList();
+                _startOneClickBulkShip(ordersToShip);
               },
               backgroundColor: const Color(0xFF0066CC),
-              icon: const Icon(Icons.checklist_rounded),
-              label: Text('شحن جماعي (${statusCounts['confirm'] ?? 0})'),
+              icon: const Icon(Icons.rocket_launch, color: Colors.white),
+              label: Text('شحن الكل بضغطة زر (${statusCounts['confirm'] ?? 0})', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
             )
           : null,
     );
@@ -2164,82 +2250,6 @@ class HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  /// Bulk action bar shown at top when in bulk mode
-  Widget _buildBulkActionBar(List<AppOrder> filteredOrders) {
-    final confirmedInView = filteredOrders.where((o) => o.status == 'confirm').toList();
-    final allSelected = confirmedInView.isNotEmpty &&
-        confirmedInView.every((o) => _selectedForBulk.contains(o.row));
-
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-      color: const Color(0xFF0066CC).withValues(alpha: 0.08),
-      child: Row(
-        children: [
-          // Select all / deselect all
-          GestureDetector(
-            onTap: () {
-              setState(() {
-                if (allSelected) {
-                  _selectedForBulk.clear();
-                } else {
-                  for (final o in confirmedInView) {
-                    _selectedForBulk.add(o.row);
-                  }
-                }
-              });
-            },
-            child: Row(
-              children: [
-                Icon(
-                  allSelected ? Icons.check_box : Icons.check_box_outline_blank,
-                  color: const Color(0xFF0066CC),
-                  size: 22,
-                ),
-                const SizedBox(width: 6),
-                Text(
-                  allSelected ? 'إلغاء الكل' : 'تحديد الكل',
-                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF0066CC)),
-                ),
-              ],
-            ),
-          ),
-          const Spacer(),
-          Text(
-            '${_selectedForBulk.length} محدد',
-            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
-          ),
-          const SizedBox(width: 12),
-          // Ship button
-          ElevatedButton.icon(
-            onPressed: _selectedForBulk.isEmpty ? null : _bulkShipSelected,
-            icon: const Icon(Icons.local_shipping, size: 16),
-            label: const Text('شحن المحدد', style: TextStyle(fontWeight: FontWeight.bold)),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF0066CC),
-              foregroundColor: Colors.white,
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-              elevation: 0,
-              disabledBackgroundColor: Colors.grey[300],
-            ),
-          ),
-          const SizedBox(width: 8),
-          // Cancel bulk mode
-          IconButton(
-            onPressed: () {
-              setState(() {
-                _bulkMode = false;
-                _selectedForBulk.clear();
-              });
-            },
-            icon: const Icon(Icons.close, size: 20),
-            tooltip: 'إلغاء الشحن الجماعي',
-            style: IconButton.styleFrom(foregroundColor: Colors.redAccent),
-          ),
-        ],
-      ),
-    );
-  }
 
   Widget _buildOrderList(List<AppOrder> orders) {
     return CustomScrollView(
@@ -2265,82 +2275,19 @@ class HomeScreenState extends State<HomeScreen> {
               delegate: SliverChildBuilderDelegate(
                 (context, index) {
                   final order = orders[index];
-                  final isSelected = _selectedForBulk.contains(order.row);
-                  final isConfirmed = order.status == 'confirm';
 
                   return Padding(
                     padding: const EdgeInsets.only(bottom: 8),
                     child: RepaintBoundary(
-                      child: _bulkMode
-                          ? GestureDetector(
-                              onTap: isConfirmed
-                                  ? () {
-                                      setState(() {
-                                        if (isSelected) {
-                                          _selectedForBulk.remove(order.row);
-                                        } else {
-                                          _selectedForBulk.add(order.row);
-                                        }
-                                      });
-                                    }
-                                  : null,
-                              child: Stack(
-                                children: [
-                                  Opacity(
-                                    opacity: isConfirmed ? 1.0 : 0.4,
-                                    child: OrderCard(
-                                      key: ValueKey(order.row),
-                                      order: order,
-                                      onStatusChange: (newStatus) =>
-                                          _updateOrderStatus(order, newStatus),
-                                      onEdit: () => _showEditDialog(order),
-                                      onShip: null, // Disabled in bulk mode
-                                    ),
-                                  ),
-                                  if (isConfirmed)
-                                    Positioned(
-                                      left: 8,
-                                      top: 8,
-                                      child: Container(
-                                        decoration: BoxDecoration(
-                                          color: isSelected
-                                              ? const Color(0xFF0066CC)
-                                              : Colors.white,
-                                          shape: BoxShape.circle,
-                                          border: Border.all(
-                                            color: isSelected
-                                                ? const Color(0xFF0066CC)
-                                                : Colors.grey[400]!,
-                                            width: 2,
-                                          ),
-                                          boxShadow: [
-                                            BoxShadow(
-                                              color: Colors.black.withValues(alpha: 0.1),
-                                              blurRadius: 4,
-                                            ),
-                                          ],
-                                        ),
-                                        padding: const EdgeInsets.all(2),
-                                        child: Icon(
-                                          Icons.check,
-                                          size: 18,
-                                          color: isSelected ? Colors.white : Colors.transparent,
-                                        ),
-                                      ),
-                                    ),
-                                ],
-                              ),
-                            )
-                          : OrderCard(
-                              key: ValueKey(order.row),
-                              order: order,
-                              onStatusChange: (newStatus) =>
-                                  _updateOrderStatus(order, newStatus),
-                              onEdit: () => _showEditDialog(order),
-                              onShip: _shippingRowsInProgress.contains(order.row)
-                                  ? null
-                                  : () => _shipWithSelectedProvider(order),
-                            ),
+                      child: OrderCard(
+                        key: ValueKey(order.row),
+                        order: order,
+                        onStatusChange: (newStatus) => _updateOrderStatus(order, newStatus),
+                        onEdit: () => _showEditDialog(order),
+                        onShip: _shippingRowsInProgress.contains(order.row)
+                            ? null
+                            : () => _shipWithSelectedProvider(order),
+                      ),
                     ),
                   );
                 },
