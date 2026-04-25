@@ -45,6 +45,10 @@ class HomeScreenState extends State<HomeScreen> {
   String? filterStatus; // null = show all
   String _searchQuery = '';
   ShippingProvider _selectedProvider = ShippingProvider.e48hr;
+  String _defaultPrice = '';
+  String _defaultProduct = '';
+  bool _bulkMode = false;
+  final Set<int> _selectedForBulk = <int>{};
 
   @override
   void initState() {
@@ -74,6 +78,12 @@ class HomeScreenState extends State<HomeScreen> {
       final prefs = await SharedPreferences.getInstance();
       final providerId = prefs.getString('selected_provider') ?? '48hr';
       _selectedProvider = ShippingProvider.fromId(providerId);
+
+      // Load stored defaults for this sheet
+      if (widget.spreadsheetId != null && widget.spreadsheetId!.isNotEmpty) {
+        _defaultPrice = prefs.getString('default_price_${widget.spreadsheetId}') ?? '';
+        _defaultProduct = prefs.getString('default_product_${widget.spreadsheetId}') ?? '';
+      }
 
       final ecotrackToken = prefs.getString('ecotrack_token');
       if (ecotrackToken != null && ecotrackToken.isNotEmpty) {
@@ -319,6 +329,11 @@ class HomeScreenState extends State<HomeScreen> {
         await prefs.setString('spreadsheetId', selectedFile.id!);
 
         if (!mounted) return;
+
+        // Prompt for product settings right after choosing the sheet
+        await _showProductSettingsDialog(selectedFile.id!, isInitialSetup: true);
+
+        if (!mounted) return;
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(
@@ -332,6 +347,167 @@ class HomeScreenState extends State<HomeScreen> {
         _showError('خطأ عند جلب الجداول: $e');
       }
     }
+  }
+
+  /// Shows a dialog to set or change the default product name & price for the current sheet.
+  Future<void> _showProductSettingsDialog(String spreadsheetId, {bool isInitialSetup = false}) async {
+    final prefs = await SharedPreferences.getInstance();
+    final currentPrice = prefs.getString('default_price_$spreadsheetId') ?? '';
+    final currentProduct = prefs.getString('default_product_$spreadsheetId') ?? '';
+    final priceController = TextEditingController(text: currentPrice);
+    final productController = TextEditingController(text: currentProduct);
+
+    if (!mounted) return;
+
+    await showDialog(
+      context: context,
+      barrierDismissible: !isInitialSetup,
+      builder: (dialogContext) => Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        child: Container(
+          padding: const EdgeInsets.all(24),
+          constraints: const BoxConstraints(maxWidth: 400),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF10B981).withValues(alpha: 0.1),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(Icons.settings_rounded, size: 40, color: Color(0xFF10B981)),
+              ),
+              const SizedBox(height: 20),
+              Text(
+                isInitialSetup ? 'إعدادات المنتج' : 'تعديل إعدادات المنتج',
+                style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 8),
+              Text(
+                isInitialSetup
+                    ? 'حدد اسم المنتج وسعره — سيُملأ تلقائيًا عند الشحن'
+                    : 'عدّل الإعدادات — سيُطبّق على الطلبات الجديدة',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 13, color: Colors.grey[600]),
+              ),
+              const SizedBox(height: 24),
+              // Product name field
+              TextField(
+                controller: productController,
+                textDirection: TextDirection.rtl,
+                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                decoration: InputDecoration(
+                  labelText: 'اسم المنتج',
+                  hintText: 'مثلا: كريم العناية',
+                  prefixIcon: const Icon(Icons.inventory_2_outlined, size: 20, color: Colors.black45),
+                  filled: true,
+                  fillColor: Colors.grey[50],
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    borderSide: BorderSide(color: Colors.grey[200]!),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    borderSide: BorderSide(color: Colors.grey[200]!),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    borderSide: const BorderSide(color: Color(0xFF10B981), width: 2),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              // Price field
+              TextField(
+                controller: priceController,
+                keyboardType: TextInputType.number,
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 28, fontWeight: FontWeight.bold, letterSpacing: 2),
+                decoration: InputDecoration(
+                  hintText: '0',
+                  hintStyle: TextStyle(color: Colors.grey[300], fontSize: 28),
+                  labelText: 'السعر',
+                  suffixText: 'د.ج',
+                  suffixStyle: TextStyle(fontSize: 14, color: Colors.grey[600]),
+                  filled: true,
+                  fillColor: Colors.grey[50],
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    borderSide: BorderSide(color: Colors.grey[200]!),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    borderSide: BorderSide(color: Colors.grey[200]!),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    borderSide: const BorderSide(color: Color(0xFF10B981), width: 2),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 24),
+              Row(
+                children: [
+                  if (!isInitialSetup)
+                    Expanded(
+                      child: OutlinedButton(
+                        onPressed: () => Navigator.pop(dialogContext),
+                        style: OutlinedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                          side: BorderSide(color: Colors.grey[300]!),
+                        ),
+                        child: const Text('إلغاء', style: TextStyle(color: Colors.black87)),
+                      ),
+                    ),
+                  if (!isInitialSetup) const SizedBox(width: 12),
+                  Expanded(
+                    flex: isInitialSetup ? 1 : 2,
+                    child: ElevatedButton(
+                      onPressed: () async {
+                        final price = priceController.text.trim();
+                        final product = productController.text.trim();
+                        await prefs.setString('default_price_$spreadsheetId', price);
+                        await prefs.setString('default_product_$spreadsheetId', product);
+                        if (mounted) {
+                          setState(() {
+                            _defaultPrice = price;
+                            _defaultProduct = product;
+                          });
+                        }
+                        if (dialogContext.mounted) Navigator.pop(dialogContext);
+                      },
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF10B981),
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                        elevation: 0,
+                      ),
+                      child: Text(
+                        isInitialSetup ? 'حفظ والمتابعة' : 'حفظ التغيير',
+                        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              if (isInitialSetup) ...[
+                const SizedBox(height: 12),
+                TextButton(
+                  onPressed: () => Navigator.pop(dialogContext),
+                  child: Text('تخطي', style: TextStyle(color: Colors.grey[500])),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   void _showError(String message) {
@@ -480,8 +656,12 @@ class HomeScreenState extends State<HomeScreen> {
       'wilaya': order.wilaya.trim(),
       'commune': order.commune.trim(),
       'address': order.address.trim(),
-      'product': order.product.trim().isNotEmpty ? order.product.trim() : 'طلب',
-      'price': order.price.trim().isNotEmpty ? order.price.trim() : '0',
+      'product': order.product.trim().isNotEmpty
+          ? order.product.trim()
+          : (_defaultProduct.isNotEmpty ? _defaultProduct : 'طلب'),
+      'price': order.price.trim().isNotEmpty
+          ? order.price.trim()
+          : (_defaultPrice.isNotEmpty ? _defaultPrice : '0'),
     };
 
     if (_locationDataReady) {
@@ -778,6 +958,14 @@ class HomeScreenState extends State<HomeScreen> {
     Map<String, String>? initialValues,
     bool showSuccessMessage = true,
   }) async {
+    // Use defaults when order has no product/price set
+    final effectiveProduct = order.product.trim().isNotEmpty
+        ? order.product
+        : (_defaultProduct.isNotEmpty ? _defaultProduct : '');
+    final effectivePrice = order.price.trim().isNotEmpty
+        ? order.price
+        : (_defaultPrice.isNotEmpty ? _defaultPrice : '');
+
     final values =
         initialValues ??
         <String, String>{
@@ -786,8 +974,8 @@ class HomeScreenState extends State<HomeScreen> {
           'wilaya': order.wilaya,
           'commune': order.commune,
           'address': order.address,
-          'product': order.product,
-          'price': order.price,
+          'product': effectiveProduct,
+          'price': effectivePrice,
         };
 
     final nameController = TextEditingController(text: values['name'] ?? '');
@@ -1156,7 +1344,7 @@ class HomeScreenState extends State<HomeScreen> {
       items: wilayas.map((w) => DropdownMenuItem(value: w, child: Text(w, overflow: TextOverflow.ellipsis))).toList(),
       onChanged: onChanged,
       decoration: InputDecoration(
-        labelText: 'الولاية',
+        labelText: 'الولاية (${wilayas.length})',
         prefixIcon: const Icon(Icons.map_outlined, size: 20, color: Colors.black45),
         filled: true,
         fillColor: Colors.grey[50],
@@ -1207,8 +1395,6 @@ class HomeScreenState extends State<HomeScreen> {
         ),
       ),
     );
-  }
-
   }
 
   /// Unified shipping method that handles all provider types
@@ -1286,6 +1472,188 @@ class HomeScreenState extends State<HomeScreen> {
         _shippingRowsInProgress.remove(order.row);
       });
     }
+  }
+
+  /// Bulk ship all selected confirmed orders sequentially
+  Future<void> _bulkShipSelected() async {
+    final ordersToShip = allOrders
+        .where((o) => _selectedForBulk.contains(o.row) && o.status == 'confirm')
+        .toList();
+
+    if (ordersToShip.isEmpty) {
+      _showError('لا توجد طلبات مؤكدة محددة للشحن');
+      return;
+    }
+
+    // Confirm dialog
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        child: Container(
+          padding: const EdgeInsets.all(24),
+          constraints: const BoxConstraints(maxWidth: 400),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF0066CC).withValues(alpha: 0.1),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(Icons.local_shipping_rounded, size: 40, color: Color(0xFF0066CC)),
+              ),
+              const SizedBox(height: 20),
+              const Text(
+                'شحن جماعي',
+                style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 12),
+              RichText(
+                textAlign: TextAlign.center,
+                text: TextSpan(
+                  style: TextStyle(fontSize: 15, color: Colors.grey[700]),
+                  children: [
+                    const TextSpan(text: 'سيتم إرسال '),
+                    TextSpan(
+                      text: '${ordersToShip.length}',
+                      style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF0066CC)),
+                    ),
+                    TextSpan(text: ' طلب إلى ${_selectedProvider.displayName}'),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 24),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: () => Navigator.pop(ctx, false),
+                      style: OutlinedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                        side: BorderSide(color: Colors.grey[300]!),
+                      ),
+                      child: const Text('إلغاء', style: TextStyle(color: Colors.black87)),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    flex: 2,
+                    child: ElevatedButton.icon(
+                      onPressed: () => Navigator.pop(ctx, true),
+                      icon: const Icon(Icons.rocket_launch, size: 18),
+                      label: const Text('ابدأ الشحن', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF0066CC),
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                        elevation: 0,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    if (confirmed != true || !mounted) return;
+
+    int successCount = 0;
+    int failCount = 0;
+
+    // Show progress snackbar
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('جاري شحن ${ordersToShip.length} طلب...'),
+        duration: const Duration(seconds: 2),
+        backgroundColor: const Color(0xFF0066CC),
+      ),
+    );
+
+    for (final order in ordersToShip) {
+      if (!mounted) break;
+      try {
+        final isEcoTrack = _selectedProvider.integrationType == 'ecotrack';
+        final readiness = _buildShippingReadiness(order, forEcoTrack: isEcoTrack);
+
+        if (!readiness.isReady) {
+          failCount++;
+          continue;
+        }
+
+        if (_hasNormalizedChanges(order, readiness.normalizedValues)) {
+          final saved = await _saveNormalizedValues(order, readiness.normalizedValues);
+          if (!saved) {
+            failCount++;
+            continue;
+          }
+        }
+
+        if (isEcoTrack) {
+          final communeOk = await _validateAndFixEcoTrackCommune(order);
+          if (!communeOk) {
+            failCount++;
+            continue;
+          }
+        }
+
+        final prefs = await SharedPreferences.getInstance();
+        final tokenKey = _getTokenKeyForProvider(_selectedProvider);
+        final apiToken = prefs.getString(tokenKey);
+        if (apiToken == null || apiToken.isEmpty) {
+          _showError('لم يتم إعداد رمز API لـ ${_selectedProvider.displayName}');
+          break;
+        }
+
+        setState(() {
+          _shippingRowsInProgress.add(order.row);
+        });
+
+        final trackingNumber = await ShippingProviderFactory
+            .createShipmentWithSelectedProvider(order, apiToken);
+
+        if (trackingNumber != null) {
+          await _updateTrackingAndStatus(order, trackingNumber, 'uploaded');
+          successCount++;
+        } else {
+          failCount++;
+        }
+      } catch (e) {
+        failCount++;
+      } finally {
+        if (mounted) {
+          setState(() {
+            _shippingRowsInProgress.remove(order.row);
+          });
+        }
+      }
+    }
+
+    if (!mounted) return;
+
+    // Exit bulk mode
+    setState(() {
+      _bulkMode = false;
+      _selectedForBulk.clear();
+    });
+
+    // Final result notification
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          'تم شحن $successCount طلب بنجاح'
+          '${failCount > 0 ? ' • فشل $failCount' : ''}',
+        ),
+        backgroundColor: failCount == 0 ? const Color(0xFF10B981) : Colors.orange,
+        duration: const Duration(seconds: 4),
+      ),
+    );
   }
 
   /// Map provider to SharedPreferences token key
@@ -1498,6 +1866,18 @@ class HomeScreenState extends State<HomeScreen> {
         ),
         actions: [
           IconButton(
+            icon: const Icon(Icons.settings_outlined),
+            onPressed: () {
+              if (widget.spreadsheetId != null) {
+                _showProductSettingsDialog(widget.spreadsheetId!);
+              }
+            },
+            color: const Color(0xFF10B981),
+            tooltip: _defaultProduct.isNotEmpty || _defaultPrice.isNotEmpty
+                ? '${_defaultProduct.isNotEmpty ? _defaultProduct : 'منتج'} • ${_defaultPrice.isNotEmpty ? '$_defaultPrice د.ج' : 'بدون سعر'}'
+                : 'إعدادات المنتج',
+          ),
+          IconButton(
             icon: const Icon(Icons.refresh),
             onPressed: fetchData,
             color: const Color(0xFF10B981),
@@ -1522,6 +1902,9 @@ class HomeScreenState extends State<HomeScreen> {
                   visibleOrders: filteredOrders.length,
                   statusCounts: statusCounts,
                 ),
+                // Bulk action bar
+                if (_bulkMode)
+                  _buildBulkActionBar(filteredOrders),
                 Expanded(
                   child: RefreshIndicator(
                     onRefresh: fetchData,
@@ -1531,6 +1914,26 @@ class HomeScreenState extends State<HomeScreen> {
                 ),
               ],
             ),
+      // Bulk ship FAB — only visible on confirm tab with orders
+      floatingActionButton: !_bulkMode && filterStatus == 'confirm' && (statusCounts['confirm'] ?? 0) > 0
+          ? FloatingActionButton.extended(
+              onPressed: () {
+                setState(() {
+                  _bulkMode = true;
+                  _selectedForBulk.clear();
+                  // Auto-select all visible confirmed orders
+                  for (final order in filteredOrders) {
+                    if (order.status == 'confirm') {
+                      _selectedForBulk.add(order.row);
+                    }
+                  }
+                });
+              },
+              backgroundColor: const Color(0xFF0066CC),
+              icon: const Icon(Icons.checklist_rounded),
+              label: Text('شحن جماعي (${statusCounts['confirm'] ?? 0})'),
+            )
+          : null,
     );
   }
 
@@ -1730,6 +2133,83 @@ class HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  /// Bulk action bar shown at top when in bulk mode
+  Widget _buildBulkActionBar(List<AppOrder> filteredOrders) {
+    final confirmedInView = filteredOrders.where((o) => o.status == 'confirm').toList();
+    final allSelected = confirmedInView.isNotEmpty &&
+        confirmedInView.every((o) => _selectedForBulk.contains(o.row));
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      color: const Color(0xFF0066CC).withValues(alpha: 0.08),
+      child: Row(
+        children: [
+          // Select all / deselect all
+          GestureDetector(
+            onTap: () {
+              setState(() {
+                if (allSelected) {
+                  _selectedForBulk.clear();
+                } else {
+                  for (final o in confirmedInView) {
+                    _selectedForBulk.add(o.row);
+                  }
+                }
+              });
+            },
+            child: Row(
+              children: [
+                Icon(
+                  allSelected ? Icons.check_box : Icons.check_box_outline_blank,
+                  color: const Color(0xFF0066CC),
+                  size: 22,
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  allSelected ? 'إلغاء الكل' : 'تحديد الكل',
+                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF0066CC)),
+                ),
+              ],
+            ),
+          ),
+          const Spacer(),
+          Text(
+            '${_selectedForBulk.length} محدد',
+            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(width: 12),
+          // Ship button
+          ElevatedButton.icon(
+            onPressed: _selectedForBulk.isEmpty ? null : _bulkShipSelected,
+            icon: const Icon(Icons.local_shipping, size: 16),
+            label: const Text('شحن المحدد', style: TextStyle(fontWeight: FontWeight.bold)),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF0066CC),
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              elevation: 0,
+              disabledBackgroundColor: Colors.grey[300],
+            ),
+          ),
+          const SizedBox(width: 8),
+          // Cancel bulk mode
+          IconButton(
+            onPressed: () {
+              setState(() {
+                _bulkMode = false;
+                _selectedForBulk.clear();
+              });
+            },
+            icon: const Icon(Icons.close, size: 20),
+            tooltip: 'إلغاء الشحن الجماعي',
+            style: IconButton.styleFrom(foregroundColor: Colors.redAccent),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildOrderList(List<AppOrder> orders) {
     return CustomScrollView(
       controller: _scrollController,
@@ -1754,19 +2234,82 @@ class HomeScreenState extends State<HomeScreen> {
               delegate: SliverChildBuilderDelegate(
                 (context, index) {
                   final order = orders[index];
+                  final isSelected = _selectedForBulk.contains(order.row);
+                  final isConfirmed = order.status == 'confirm';
+
                   return Padding(
                     padding: const EdgeInsets.only(bottom: 8),
                     child: RepaintBoundary(
-                      child: OrderCard(
-                        key: ValueKey(order.row),
-                        order: order,
-                        onStatusChange: (newStatus) =>
-                            _updateOrderStatus(order, newStatus),
-                        onEdit: () => _showEditDialog(order),
-                        onShip: _shippingRowsInProgress.contains(order.row)
-                            ? null
-                            : () => _shipWithSelectedProvider(order),
-                      ),
+                      child: _bulkMode
+                          ? GestureDetector(
+                              onTap: isConfirmed
+                                  ? () {
+                                      setState(() {
+                                        if (isSelected) {
+                                          _selectedForBulk.remove(order.row);
+                                        } else {
+                                          _selectedForBulk.add(order.row);
+                                        }
+                                      });
+                                    }
+                                  : null,
+                              child: Stack(
+                                children: [
+                                  Opacity(
+                                    opacity: isConfirmed ? 1.0 : 0.4,
+                                    child: OrderCard(
+                                      key: ValueKey(order.row),
+                                      order: order,
+                                      onStatusChange: (newStatus) =>
+                                          _updateOrderStatus(order, newStatus),
+                                      onEdit: () => _showEditDialog(order),
+                                      onShip: null, // Disabled in bulk mode
+                                    ),
+                                  ),
+                                  if (isConfirmed)
+                                    Positioned(
+                                      left: 8,
+                                      top: 8,
+                                      child: Container(
+                                        decoration: BoxDecoration(
+                                          color: isSelected
+                                              ? const Color(0xFF0066CC)
+                                              : Colors.white,
+                                          shape: BoxShape.circle,
+                                          border: Border.all(
+                                            color: isSelected
+                                                ? const Color(0xFF0066CC)
+                                                : Colors.grey[400]!,
+                                            width: 2,
+                                          ),
+                                          boxShadow: [
+                                            BoxShadow(
+                                              color: Colors.black.withValues(alpha: 0.1),
+                                              blurRadius: 4,
+                                            ),
+                                          ],
+                                        ),
+                                        padding: const EdgeInsets.all(2),
+                                        child: Icon(
+                                          Icons.check,
+                                          size: 18,
+                                          color: isSelected ? Colors.white : Colors.transparent,
+                                        ),
+                                      ),
+                                    ),
+                                ],
+                              ),
+                            )
+                          : OrderCard(
+                              key: ValueKey(order.row),
+                              order: order,
+                              onStatusChange: (newStatus) =>
+                                  _updateOrderStatus(order, newStatus),
+                              onEdit: () => _showEditDialog(order),
+                              onShip: _shippingRowsInProgress.contains(order.row)
+                                  ? null
+                                  : () => _shipWithSelectedProvider(order),
+                            ),
                     ),
                   );
                 },
