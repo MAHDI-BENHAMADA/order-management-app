@@ -84,6 +84,8 @@ class AlgeriaLocationService {
       if (wilayasData.isEmpty) {
         print('⚠️ EcoTrack API returned no wilayas, using fallback');
         _loadFallbackData();
+        await _loadCommunesFromLocalJson();
+        _loaded = true;
         return;
       }
 
@@ -125,6 +127,8 @@ class AlgeriaLocationService {
     } catch (e) {
       print('❌ Error during location data loading: $e');
       _loadFallbackData();
+      await _loadCommunesFromLocalJson();
+      _loaded = true;
     }
   }
 
