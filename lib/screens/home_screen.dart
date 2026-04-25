@@ -46,6 +46,7 @@ class HomeScreenState extends State<HomeScreen> {
   String _searchQuery = '';
   ShippingProvider _selectedProvider = ShippingProvider.e48hr;
   String _defaultPrice = '';
+  String _defaultProduct = '';
   bool _bulkMode = false;
   final Set<int> _selectedForBulk = <int>{};
 
@@ -78,9 +79,10 @@ class HomeScreenState extends State<HomeScreen> {
       final providerId = prefs.getString('selected_provider') ?? '48hr';
       _selectedProvider = ShippingProvider.fromId(providerId);
 
-      // Load stored default price for this sheet
+      // Load stored defaults for this sheet
       if (widget.spreadsheetId != null && widget.spreadsheetId!.isNotEmpty) {
         _defaultPrice = prefs.getString('default_price_${widget.spreadsheetId}') ?? '';
+        _defaultProduct = prefs.getString('default_product_${widget.spreadsheetId}') ?? '';
       }
 
       final ecotrackToken = prefs.getString('ecotrack_token');
@@ -328,8 +330,8 @@ class HomeScreenState extends State<HomeScreen> {
 
         if (!mounted) return;
 
-        // Prompt for default price right after choosing the sheet
-        await _showDefaultPriceDialog(selectedFile.id!, isInitialSetup: true);
+        // Prompt for product settings right after choosing the sheet
+        await _showProductSettingsDialog(selectedFile.id!, isInitialSetup: true);
 
         if (!mounted) return;
         Navigator.pushReplacement(
@@ -347,11 +349,13 @@ class HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  /// Shows a dialog to set or change the default price for the current sheet.
-  Future<void> _showDefaultPriceDialog(String spreadsheetId, {bool isInitialSetup = false}) async {
+  /// Shows a dialog to set or change the default product name & price for the current sheet.
+  Future<void> _showProductSettingsDialog(String spreadsheetId, {bool isInitialSetup = false}) async {
     final prefs = await SharedPreferences.getInstance();
     final currentPrice = prefs.getString('default_price_$spreadsheetId') ?? '';
-    final controller = TextEditingController(text: currentPrice);
+    final currentProduct = prefs.getString('default_product_$spreadsheetId') ?? '';
+    final priceController = TextEditingController(text: currentPrice);
+    final productController = TextEditingController(text: currentProduct);
 
     if (!mounted) return;
 
@@ -372,46 +376,75 @@ class HomeScreenState extends State<HomeScreen> {
                   color: const Color(0xFF10B981).withValues(alpha: 0.1),
                   shape: BoxShape.circle,
                 ),
-                child: const Icon(Icons.payments_rounded, size: 40, color: Color(0xFF10B981)),
+                child: const Icon(Icons.settings_rounded, size: 40, color: Color(0xFF10B981)),
               ),
               const SizedBox(height: 20),
               Text(
-                isInitialSetup ? 'حدد سعر المنتج' : 'تغيير سعر المنتج',
+                isInitialSetup ? 'إعدادات المنتج' : 'تعديل إعدادات المنتج',
                 style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 8),
               Text(
                 isInitialSetup
-                    ? 'أدخل السعر الافتراضي لهذا الجدول — سيُستخدم تلقائيًا عند شحن الطلبات'
-                    : 'عدّل السعر الافتراضي — سيُطبّق على الطلبات الجديدة فقط',
+                    ? 'حدد اسم المنتج وسعره — سيُملأ تلقائيًا عند الشحن'
+                    : 'عدّل الإعدادات — سيُطبّق على الطلبات الجديدة',
                 textAlign: TextAlign.center,
                 style: TextStyle(fontSize: 13, color: Colors.grey[600]),
               ),
               const SizedBox(height: 24),
+              // Product name field
               TextField(
-                controller: controller,
+                controller: productController,
+                textDirection: TextDirection.rtl,
+                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                decoration: InputDecoration(
+                  labelText: 'اسم المنتج',
+                  hintText: 'مثلا: كريم العناية',
+                  prefixIcon: const Icon(Icons.inventory_2_outlined, size: 20, color: Colors.black45),
+                  filled: true,
+                  fillColor: Colors.grey[50],
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    borderSide: BorderSide(color: Colors.grey[200]!),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    borderSide: BorderSide(color: Colors.grey[200]!),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    borderSide: const BorderSide(color: Color(0xFF10B981), width: 2),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              // Price field
+              TextField(
+                controller: priceController,
                 keyboardType: TextInputType.number,
                 textAlign: TextAlign.center,
                 style: const TextStyle(fontSize: 28, fontWeight: FontWeight.bold, letterSpacing: 2),
                 decoration: InputDecoration(
                   hintText: '0',
                   hintStyle: TextStyle(color: Colors.grey[300], fontSize: 28),
+                  labelText: 'السعر',
                   suffixText: 'د.ج',
                   suffixStyle: TextStyle(fontSize: 14, color: Colors.grey[600]),
                   filled: true,
                   fillColor: Colors.grey[50],
                   contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
                   border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(16),
+                    borderRadius: BorderRadius.circular(14),
                     borderSide: BorderSide(color: Colors.grey[200]!),
                   ),
                   enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(16),
+                    borderRadius: BorderRadius.circular(14),
                     borderSide: BorderSide(color: Colors.grey[200]!),
                   ),
                   focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(16),
+                    borderRadius: BorderRadius.circular(14),
                     borderSide: const BorderSide(color: Color(0xFF10B981), width: 2),
                   ),
                 ),
@@ -436,11 +469,14 @@ class HomeScreenState extends State<HomeScreen> {
                     flex: isInitialSetup ? 1 : 2,
                     child: ElevatedButton(
                       onPressed: () async {
-                        final price = controller.text.trim();
+                        final price = priceController.text.trim();
+                        final product = productController.text.trim();
                         await prefs.setString('default_price_$spreadsheetId', price);
+                        await prefs.setString('default_product_$spreadsheetId', product);
                         if (mounted) {
                           setState(() {
                             _defaultPrice = price;
+                            _defaultProduct = product;
                           });
                         }
                         if (dialogContext.mounted) Navigator.pop(dialogContext);
@@ -620,7 +656,9 @@ class HomeScreenState extends State<HomeScreen> {
       'wilaya': order.wilaya.trim(),
       'commune': order.commune.trim(),
       'address': order.address.trim(),
-      'product': order.product.trim().isNotEmpty ? order.product.trim() : 'طلب',
+      'product': order.product.trim().isNotEmpty
+          ? order.product.trim()
+          : (_defaultProduct.isNotEmpty ? _defaultProduct : 'طلب'),
       'price': order.price.trim().isNotEmpty
           ? order.price.trim()
           : (_defaultPrice.isNotEmpty ? _defaultPrice : '0'),
@@ -920,7 +958,10 @@ class HomeScreenState extends State<HomeScreen> {
     Map<String, String>? initialValues,
     bool showSuccessMessage = true,
   }) async {
-    // Use default price when order has no price set
+    // Use defaults when order has no product/price set
+    final effectiveProduct = order.product.trim().isNotEmpty
+        ? order.product
+        : (_defaultProduct.isNotEmpty ? _defaultProduct : '');
     final effectivePrice = order.price.trim().isNotEmpty
         ? order.price
         : (_defaultPrice.isNotEmpty ? _defaultPrice : '');
@@ -933,7 +974,7 @@ class HomeScreenState extends State<HomeScreen> {
           'wilaya': order.wilaya,
           'commune': order.commune,
           'address': order.address,
-          'product': order.product,
+          'product': effectiveProduct,
           'price': effectivePrice,
         };
 
@@ -1303,7 +1344,7 @@ class HomeScreenState extends State<HomeScreen> {
       items: wilayas.map((w) => DropdownMenuItem(value: w, child: Text(w, overflow: TextOverflow.ellipsis))).toList(),
       onChanged: onChanged,
       decoration: InputDecoration(
-        labelText: 'الولاية',
+        labelText: 'الولاية (${wilayas.length})',
         prefixIcon: const Icon(Icons.map_outlined, size: 20, color: Colors.black45),
         filled: true,
         fillColor: Colors.grey[50],
@@ -1825,16 +1866,16 @@ class HomeScreenState extends State<HomeScreen> {
         ),
         actions: [
           IconButton(
-            icon: const Icon(Icons.payments_outlined),
+            icon: const Icon(Icons.settings_outlined),
             onPressed: () {
               if (widget.spreadsheetId != null) {
-                _showDefaultPriceDialog(widget.spreadsheetId!);
+                _showProductSettingsDialog(widget.spreadsheetId!);
               }
             },
             color: const Color(0xFF10B981),
-            tooltip: _defaultPrice.isNotEmpty
-                ? 'السعر: $_defaultPrice د.ج'
-                : 'تحديد السعر الافتراضي',
+            tooltip: _defaultProduct.isNotEmpty || _defaultPrice.isNotEmpty
+                ? '${_defaultProduct.isNotEmpty ? _defaultProduct : 'منتج'} • ${_defaultPrice.isNotEmpty ? '$_defaultPrice د.ج' : 'بدون سعر'}'
+                : 'إعدادات المنتج',
           ),
           IconButton(
             icon: const Icon(Icons.refresh),
