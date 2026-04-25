@@ -13,60 +13,64 @@ class AlgeriaLocationService {
   // Fallback hardcoded wilayas in case API fails
   // Fallback hardcoded wilayas in case API fails
   static const Map<String, int> _fallbackWilayaCodes = {
-    'الجزائر': 1,
-    'وهران': 2,
-    'قسنطينة': 3,
-    'البليدة': 4,
-    'بوفاريك': 5,
-    'تلمسان': 6,
-    'جيجل': 7,
-    'سيدي بلعباس': 8,
-    'سطيف': 9,
-    'تيارت': 10,
-    'تيزي وزو': 11,
-    'الجلفة': 12,
-    'سعيدة': 13,
-    'سكيكدة': 14,
-    'سيدي عيسى': 15,
-    'الشلف': 16,
-    'البيض': 17,
-    'عنابة': 18,
-    'الأغواط': 19,
-    'قالمة': 20,
-    'قرقرة': 21,
-    'بسكرة': 22,
-    'طبرقة': 23,
-    'تبسة': 24,
-    'برج بوعريريج': 25,
-    'عين الدفلى': 26,
-    'عين تيموشنت': 27,
-    'غرداية': 28,
-    'الحمادية': 29,
-    'درعة و تافيلالت': 30,
-    'الونشريس': 31,
-    'المنيعة': 32,
-    'الأوراس': 34,
-    'الإهقار': 35,
-    'نقادي': 36,
-    'أوليلي': 38,
-    'أدرار': 39,
-    'باتنة': 40,
-    'بني سويف': 41,
-    'بنى هلال': 42,
-    'بوسعادة': 43,
-    'الشقرة': 44,
-    'المسيلة': 45,
-    'عين بوسيف': 46,
-    'أم البواقي': 47,
-    'الواحات': 48,
-    'سباتين': 49,
-    'إليزي': 51,
-    'تمنراست': 52,
-    'الطاسيلي': 53,
-    'عين قزام': 54,
-    'جانت': 55,
-    'إنقوسة': 57,
-    'جاسي': 58,
+    '01. أدرار': 1,
+    '02. الشلف': 2,
+    '03. الأغواط': 3,
+    '04. أم البواقي': 4,
+    '05. باتنة': 5,
+    '06. بجاية': 6,
+    '07. بسكرة': 7,
+    '08. بشار': 8,
+    '09. البليدة': 9,
+    '10. البويرة': 10,
+    '11. تمنراست': 11,
+    '12. تبسة': 12,
+    '13. تلمسان': 13,
+    '14. تيارت': 14,
+    '15. تيزي وزو': 15,
+    '16. الجزائر': 16,
+    '17. الجلفة': 17,
+    '18. جيجل': 18,
+    '19. سطيف': 19,
+    '20. سعيدة': 20,
+    '21. سكيكدة': 21,
+    '22. سيدي بلعباس': 22,
+    '23. عنابة': 23,
+    '24. قالمة': 24,
+    '25. قسنطينة': 25,
+    '26. المدية': 26,
+    '27. مستغانم': 27,
+    '28. المسيلة': 28,
+    '29. معسكر': 29,
+    '30. ورقلة': 30,
+    '31. وهران': 31,
+    '32. البيض': 32,
+    '33. إليزي': 33,
+    '34. برج بوعريريج': 34,
+    '35. بومرداس': 35,
+    '36. الطارف': 36,
+    '37. تندوف': 37,
+    '38. تيسمسيلت': 38,
+    '39. الوادي': 39,
+    '40. خنشلة': 40,
+    '41. سوق أهراس': 41,
+    '42. تيبازة': 42,
+    '43. ميلة': 43,
+    '44. عين الدفلى': 44,
+    '45. النعامة': 45,
+    '46. عين تموشنت': 46,
+    '47. غرداية': 47,
+    '48. غليزان': 48,
+    '49. تميمون': 49,
+    '50. برج باجي مختار': 50,
+    '51. أولاد جلال': 51,
+    '52. بني عباس': 52,
+    '53. عين صالح': 53,
+    '54. عين قزام': 54,
+    '55. تقرت': 55,
+    '56. جانت': 56,
+    '57. المغير': 57,
+    '58. المنيعة': 58,
   };
 
   static Future<void> ensureLoaded() async {
@@ -86,19 +90,36 @@ class AlgeriaLocationService {
       _wilayas.clear();
       _wilayaNameToId.clear();
 
+      // Load wilayas from API response
       for (final wilaya in wilayasData) {
         final wilayaName = wilaya['wilaya_name'] ?? wilaya['nom'] ?? '';
         final wilayaId = wilaya['wilaya_id'] ?? wilaya['id'] ?? 0;
 
         if (wilayaName.isNotEmpty && wilayaId != 0) {
           final nameStr = wilayaName.toString().trim();
-          _wilayas.add(nameStr);
           _wilayaNameToId[nameStr] = wilayaId as int;
         }
       }
 
-      _wilayas.sort();
-      print('✅ Loaded ${_wilayas.length} wilayas from EcoTrack API');
+      print('📊 API returned ${_wilayaNameToId.length} wilayas');
+
+      // Supplement with fallback: add any wilaya IDs that the API missed
+      final apiIds = _wilayaNameToId.values.toSet();
+      for (final entry in _fallbackWilayaCodes.entries) {
+        if (!apiIds.contains(entry.value)) {
+          print('➕ Adding missing wilaya from fallback: ${entry.key} (ID: ${entry.value})');
+          _wilayaNameToId[entry.key] = entry.value;
+        }
+      }
+
+      // Sort by wilaya ID numerically (01 → 58)
+      final sortedEntries = _wilayaNameToId.entries.toList()
+        ..sort((a, b) => a.value.compareTo(b.value));
+      _wilayas
+        ..clear()
+        ..addAll(sortedEntries.map((e) => e.key));
+
+      print('✅ Total wilayas after merge: ${_wilayas.length}');
 
       // Step 2: Load communes from LOCAL JSON file (NO API CALLS = NO RATE LIMITING!)
       print('📚 Loading communes from local JSON file...');
