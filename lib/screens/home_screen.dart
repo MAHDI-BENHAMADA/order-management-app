@@ -980,19 +980,28 @@ class HomeScreenState extends State<HomeScreen> {
 
     final nameController = TextEditingController(text: values['name'] ?? '');
     final phoneController = TextEditingController(text: values['phone'] ?? '');
-    final addressController = TextEditingController(
-      text: values['address'] ?? '',
-    );
-    final productController = TextEditingController(
-      text: values['product'] ?? '',
-    );
-    final priceController = TextEditingController(text: values['price'] ?? '');
+    // Auto-address helper: 'commune - wilaya' with clean names (strip number prefix)
+    String _cleanName(String s) => s.replaceFirst(RegExp(r'^\d+\.\s*'), '').trim();
+    String _buildAutoAddress(String w, String c) {
+      final cw = _cleanName(w);
+      final cc = _cleanName(c);
+      if (cw.isEmpty && cc.isEmpty) return '';
+      if (cw.isEmpty) return cc;
+      if (cc.isEmpty) return cw;
+      return '$cc - $cw';
+    }
+
     final communeController = TextEditingController(
       text: values['commune'] ?? '',
     );
     final wilayaController = TextEditingController(
       text: values['wilaya'] ?? '',
     );
+
+    String lastAutoAddress = _buildAutoAddress(wilayaController.text, communeController.text);
+    if (addressController.text.isEmpty) {
+      addressController.text = lastAutoAddress;
+    }
 
     String selectedWilaya = wilayaController.text.trim();
     if (_locationDataReady) {
@@ -1118,6 +1127,13 @@ class HomeScreenState extends State<HomeScreen> {
                                     } else {
                                       communeController.clear();
                                     }
+
+                                    // Auto update address if it matches auto-generated or is empty
+                                    final newAutoAddress = _buildAutoAddress(selectedWilaya, communeController.text);
+                                    if (addressController.text.trim().isEmpty || addressController.text.trim() == lastAutoAddress) {
+                                      addressController.text = newAutoAddress;
+                                      lastAutoAddress = newAutoAddress;
+                                    }
                                   });
                                 }
                               ),
@@ -1130,6 +1146,13 @@ class HomeScreenState extends State<HomeScreen> {
                                 onChanged: (value) {
                                   setDialogState(() {
                                     communeController.text = value ?? '';
+
+                                    // Auto update address if it matches auto-generated or is empty
+                                    final newAutoAddress = _buildAutoAddress(selectedWilaya, communeController.text);
+                                    if (addressController.text.trim().isEmpty || addressController.text.trim() == lastAutoAddress) {
+                                      addressController.text = newAutoAddress;
+                                      lastAutoAddress = newAutoAddress;
+                                    }
                                   });
                                 }
                               ),
