@@ -1425,26 +1425,31 @@ class HomeScreenState extends State<HomeScreen> {
     required String? selectedValue,
     required ValueChanged<String?> onChanged,
   }) {
-    if (!_locationDataReady || communes.isEmpty) {
-      // Fallback to text field if no communes loaded
-      return _buildModernTextField(
-        controller: TextEditingController(text: selectedValue),
-        label: 'البلدية',
-        icon: Icons.location_city_outlined,
-        textDirection: TextDirection.rtl,
-      );
-    }
+    final bool isReady = _locationDataReady && communes.isNotEmpty;
+    
+    // Ensure the value is valid for the current list of communes
+    String? validValue = isReady && communes.contains(selectedValue) ? selectedValue : null;
 
     return DropdownButtonFormField<String>(
-      value: communes.contains(selectedValue) ? selectedValue : (communes.isNotEmpty ? communes.first : null),
+      value: validValue,
       isExpanded: true,
-      items: communes.map((c) => DropdownMenuItem(value: c, child: Text(c, overflow: TextOverflow.ellipsis))).toList(),
-      onChanged: onChanged,
+      hint: Text(
+        !_locationDataReady 
+            ? 'جاري التحميل...' 
+            : (communes.isEmpty ? 'اختر الولاية أولاً' : 'اختر البلدية')
+      ),
+      items: isReady 
+          ? communes.map((c) => DropdownMenuItem(
+              value: c, 
+              child: Text(c, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 14))
+            )).toList()
+          : [],
+      onChanged: isReady ? onChanged : null,
       decoration: InputDecoration(
         labelText: 'البلدية',
         prefixIcon: const Icon(Icons.location_city_outlined, size: 20, color: Colors.black45),
         filled: true,
-        fillColor: Colors.grey[50],
+        fillColor: isReady ? Colors.grey[50] : Colors.grey[100],
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
           borderSide: BorderSide(color: Colors.grey[200]!),
@@ -1452,6 +1457,10 @@ class HomeScreenState extends State<HomeScreen> {
         enabledBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
           borderSide: BorderSide(color: Colors.grey[200]!),
+        ),
+        disabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide(color: Colors.grey[50]!),
         ),
       ),
     );
