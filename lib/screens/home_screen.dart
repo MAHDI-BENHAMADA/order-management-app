@@ -980,6 +980,14 @@ class HomeScreenState extends State<HomeScreen> {
 
     final nameController = TextEditingController(text: values['name'] ?? '');
     final phoneController = TextEditingController(text: values['phone'] ?? '');
+    final addressController = TextEditingController(
+      text: values['address'] ?? '',
+    );
+    final productController = TextEditingController(
+      text: values['product'] ?? '',
+    );
+    final priceController = TextEditingController(text: values['price'] ?? '');
+    
     // Auto-address helper: 'commune - wilaya' with clean names (strip number prefix)
     String _cleanName(String s) => s.replaceFirst(RegExp(r'^\d+\.\s*'), '').trim();
     String _buildAutoAddress(String w, String c) {

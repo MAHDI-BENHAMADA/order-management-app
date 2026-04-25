@@ -89,37 +89,32 @@ class AlgeriaLocationService {
 
       _wilayas.clear();
       _wilayaNameToId.clear();
+      
+      // 1. Set official UI names from our Arabic fallback list
+      _wilayaNameToId.addAll(_fallbackWilayaCodes);
 
-      // Load wilayas from API response
+      final sortedEntries = _fallbackWilayaCodes.entries.toList()
+        ..sort((a, b) => a.value.compareTo(b.value));
+      _wilayas.addAll(sortedEntries.map((e) => e.key));
+
+      // 2. Load wilayas from API response as ALIASES
+      // This means if the API returns "Tipaza" with ID 42, we map "Tipaza" -> 42,
+      // but the UI only ever displays "42. تيبازة"
+      int aliasCount = 0;
       for (final wilaya in wilayasData) {
         final wilayaName = wilaya['wilaya_name'] ?? wilaya['nom'] ?? '';
         final wilayaId = wilaya['wilaya_id'] ?? wilaya['id'] ?? 0;
 
         if (wilayaName.isNotEmpty && wilayaId != 0) {
           final nameStr = wilayaName.toString().trim();
-          _wilayaNameToId[nameStr] = wilayaId as int;
+          if (!_wilayaNameToId.containsKey(nameStr)) {
+            _wilayaNameToId[nameStr] = wilayaId as int;
+            aliasCount++;
+          }
         }
       }
 
-      print('📊 API returned ${_wilayaNameToId.length} wilayas');
-
-      // Supplement with fallback: add any wilaya IDs that the API missed
-      final apiIds = _wilayaNameToId.values.toSet();
-      for (final entry in _fallbackWilayaCodes.entries) {
-        if (!apiIds.contains(entry.value)) {
-          print('➕ Adding missing wilaya from fallback: ${entry.key} (ID: ${entry.value})');
-          _wilayaNameToId[entry.key] = entry.value;
-        }
-      }
-
-      // Sort by wilaya ID numerically (01 → 58)
-      final sortedEntries = _wilayaNameToId.entries.toList()
-        ..sort((a, b) => a.value.compareTo(b.value));
-      _wilayas
-        ..clear()
-        ..addAll(sortedEntries.map((e) => e.key));
-
-      print('✅ Total wilayas after merge: ${_wilayas.length}');
+      print('✅ Loaded 58 official Arabic wilayas, plus $aliasCount aliases from API');
 
       // Step 2: Load communes from LOCAL JSON file (NO API CALLS = NO RATE LIMITING!)
       print('📚 Loading communes from local JSON file...');
@@ -147,19 +142,19 @@ class AlgeriaLocationService {
         final wilayaId = commune['wilaya_id'] as int?;
 
         if (communeName != null && communeName.isNotEmpty && wilayaId != null) {
-          // Find wilaya name by ID
-          String? wilayaName;
-          for (final entry in _wilayaNameToId.entries) {
+          // Find official Arabic wilaya name by ID
+          String? officialWilayaName;
+          for (final entry in _fallbackWilayaCodes.entries) {
             if (entry.value == wilayaId) {
-              wilayaName = entry.key;
+              officialWilayaName = entry.key;
               break;
             }
           }
 
-          if (wilayaName != null) {
-            _wilayaToCommunes.putIfAbsent(wilayaName, () => <String>[]);
-            if (!_wilayaToCommunes[wilayaName]!.contains(communeName)) {
-              _wilayaToCommunes[wilayaName]!.add(communeName);
+          if (officialWilayaName != null) {
+            _wilayaToCommunes.putIfAbsent(officialWilayaName, () => <String>[]);
+            if (!_wilayaToCommunes[officialWilayaName]!.contains(communeName)) {
+              _wilayaToCommunes[officialWilayaName]!.add(communeName);
             }
           }
         }
@@ -249,6 +244,13 @@ class AlgeriaLocationService {
     return const <String>[];
   }
 
+  static String? _getOfficialNameById(int id) {
+    for (final entry in _fallbackWilayaCodes.entries) {
+      if (entry.value == id) return entry.key;
+    }
+    return null;
+  }
+
   static String? normalizeWilaya(String value) {
     final trimmed = value.trim();
     if (trimmed.isEmpty) return null;
@@ -258,22 +260,27 @@ class AlgeriaLocationService {
     if (idMatch != null) {
       final id = int.tryParse(idMatch.group(1)!);
       if (id != null) {
-        for (final entry in _wilayaNameToId.entries) {
-          if (entry.value == id) return entry.key;
-        }
+        final officialName = _getOfficialNameById(id);
+        if (officialName != null) return officialName;
       }
     }
 
-    // 2. Try exact match
-    if (_wilayas.contains(trimmed)) {
+    // 2. Try exact match in official Arabic names
+    if (_fallbackWilayaCodes.containsKey(trimmed)) {
       return trimmed;
     }
 
-    // 3. Try normalized match (ignoring spaces, case, etc)
+    // 3. Try exact match in aliases (e.g. "Alger" from API)
+    if (_wilayaNameToId.containsKey(trimmed)) {
+      final id = _wilayaNameToId[trimmed]!;
+      return _getOfficialNameById(id);
+    }
+
+    // 4. Try normalized match (ignoring spaces, case, etc) using all aliases
     final normalized = _normalize(trimmed);
-    for (final wilaya in _wilayas) {
-      if (_normalize(wilaya) == normalized) {
-        return wilaya;
+    for (final entry in _wilayaNameToId.entries) {
+      if (_normalize(entry.key) == normalized) {
+        return _getOfficialNameById(entry.value);
       }
     }
 
