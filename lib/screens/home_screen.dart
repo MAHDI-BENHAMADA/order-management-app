@@ -10,8 +10,12 @@ import '../widgets/order_card.dart';
 import '../widgets/token_setup_dialog.dart';
 import '../utils/algeria_location_service.dart';
 import '../utils/google_auth_service.dart';
+import 'dart:convert';
+import 'package:flutter/services.dart';
 import '../services/ecotrack_service.dart';
 import '../services/shipping_provider_factory.dart';
+import 'staff_management_screen.dart';
+import 'setup_screen.dart';
 
 class _ShippingReadiness {
   final Map<String, String> normalizedValues;
@@ -47,6 +51,7 @@ class HomeScreenState extends State<HomeScreen> {
   ShippingProvider _selectedProvider = ShippingProvider.e48hr;
   String _defaultPrice = '';
   String _defaultProduct = '';
+  bool isOwner = false;
 
   @override
   void initState() {
@@ -82,6 +87,8 @@ class HomeScreenState extends State<HomeScreen> {
         _defaultPrice = prefs.getString('default_price_${widget.spreadsheetId}') ?? '';
         _defaultProduct = prefs.getString('default_product_${widget.spreadsheetId}') ?? '';
       }
+      
+      isOwner = prefs.getBool('isOwner') ?? false;
 
       final ecotrackToken = prefs.getString('ecotrack_token');
       if (ecotrackToken != null && ecotrackToken.isNotEmpty) {
@@ -327,6 +334,31 @@ class HomeScreenState extends State<HomeScreen> {
         await prefs.setString('spreadsheetId', selectedFile.id!);
 
         if (!mounted) return;
+        
+        // --- Automatically share the sheet with the Service Account ---
+        try {
+          final jsonString = await rootBundle.loadString('assets/service_account.json');
+          final serviceAccount = jsonDecode(jsonString);
+          final clientEmail = serviceAccount['client_email'];
+
+          if (clientEmail != null) {
+            final permission = drive.Permission(
+              type: 'user',
+              role: 'writer',
+              emailAddress: clientEmail,
+            );
+            
+            await driveApi.permissions.create(
+              permission, 
+              selectedFile.id!, 
+              sendNotificationEmail: false
+            );
+            print('Successfully shared sheet with service account: $clientEmail');
+          }
+        } catch (e) {
+          print('Could not auto-share sheet: $e');
+        }
+        // -------------------------------------------------------------
 
         // Prompt for product settings right after choosing the sheet
         await _showProductSettingsDialog(selectedFile.id!, isInitialSetup: true);
@@ -516,12 +548,11 @@ class HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _logout() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove('spreadsheetId');
+    await GoogleAuthService.signOut();
     if (mounted) {
       Navigator.pushReplacement(
         context,
-        MaterialPageRoute(builder: (context) => const HomeScreen(spreadsheetId: null)),
+        MaterialPageRoute(builder: (context) => SetupScreen()),
       );
     }
   }
@@ -1967,11 +1998,17 @@ class HomeScreenState extends State<HomeScreen> {
                 const SizedBox(height: 32),
                 ElevatedButton.icon(
                   onPressed: _showSheetSelector,
-                  icon: const Icon(Icons.add),
-                  label: const Text('إضافة جدول'),
+                  icon: const Icon(Icons.add, color: Colors.white),
+                  label: const Text(
+                    'إضافة جدول بيانات',
+                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                  ),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: const Color(0xFF10B981),
                     padding: const EdgeInsets.symmetric(vertical: 16),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
                   ),
                 ),
               ],
@@ -1992,6 +2029,22 @@ class HomeScreenState extends State<HomeScreen> {
           style: TextStyle(fontWeight: FontWeight.bold),
         ),
         actions: [
+          if (isOwner && widget.spreadsheetId != null && widget.spreadsheetId!.isNotEmpty)
+            IconButton(
+              icon: const Icon(Icons.people_alt),
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => StaffManagementScreen(
+                      currentSpreadsheetId: widget.spreadsheetId!,
+                    ),
+                  ),
+                );
+              },
+              color: const Color(0xFF10B981),
+              tooltip: 'إدارة الموظفين',
+            ),
           IconButton(
             icon: const Icon(Icons.settings_outlined),
             onPressed: () {

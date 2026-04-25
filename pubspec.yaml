@@ -43,6 +43,8 @@ dependencies:
   google_sign_in: ^6.2.2
   googleapis: ^16.0.0
   googleapis_auth: ^2.3.0
+  firebase_core: ^4.7.0
+  cloud_firestore: ^6.3.0
 
 dev_dependencies:
   flutter_test:
@@ -68,6 +70,7 @@ flutter:
 
   assets:
     - communes.json
+    - assets/service_account.json
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images
