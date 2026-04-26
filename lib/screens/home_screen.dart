@@ -150,6 +150,67 @@ class HomeScreenState extends State<HomeScreen> {
       columnMap.forEach((letter, field) {
         if (field != null) newFieldToColumn[field] = letter;
       });
+
+      // --- Content-based fallback: detect status/tracking if headers didn't match ---
+      // Known status values that may appear in the data
+      const knownStatusValues = {
+        'confirm', 'no_response', 'canceled', 'uploaded', 'جديد',
+        'مؤكد', 'ملغى', 'لا إجابة', 'أرشيف', 'nouveau', 'confirmé',
+      };
+      final mappedLetters = newFieldToColumn.values.toSet();
+
+      if (!newFieldToColumn.containsKey('status')) {
+        for (int col = 0; col < headerRow.length; col++) {
+          final letter = _colLetter(col);
+          if (mappedLetters.contains(letter)) continue;
+          int hits = 0;
+          for (int row = 1; row < rows.length && row <= 10; row++) {
+            final r = rows[row];
+            if (col < r.length) {
+              final v = r[col].toString().trim().toLowerCase();
+              if (knownStatusValues.contains(v)) hits++;
+            }
+          }
+          if (hits > 0) {
+            newFieldToColumn['status'] = letter;
+            columnMap[letter] = 'status';
+            mappedLetters.add(letter);
+            print('✅ Content-based status detection: column $letter');
+            break;
+          }
+        }
+      }
+
+      // --- Auto-assign missing critical columns to the end of the sheet ---
+      Future<void> _ensureColumnExists(String field, String headerName) async {
+        if (!newFieldToColumn.containsKey(field)) {
+          int nextCol = headerRow.length;
+          while (mappedLetters.contains(_colLetter(nextCol))) nextCol++;
+          
+          final letter = _colLetter(nextCol);
+          newFieldToColumn[field] = letter;
+          columnMap[letter] = field;
+          mappedLetters.add(letter);
+          print('🆕 Auto-assigned $field to new column $letter');
+
+          // Write header to sheet so it's permanent
+          try {
+            final api = await GoogleAuthService.getSheetsApi();
+            if (api != null) {
+              await api.spreadsheets.values.update(
+                sheets.ValueRange(values: [[headerName]]),
+                widget.spreadsheetId!,
+                '${letter}1',
+                valueInputOption: 'USER_ENTERED',
+              );
+            }
+          } catch (_) {}
+        }
+      }
+
+      await _ensureColumnExists('status', 'Statut');
+      await _ensureColumnExists('tracking', 'Tracking');
+
       setState(() { _fieldToColumn = newFieldToColumn; });
 
       // --- Step 2: Parse each data row using the mapping ---
@@ -612,6 +673,17 @@ class HomeScreenState extends State<HomeScreen> {
     return counts;
   }
 
+  /// Converts a 0-based column index to an Excel-style letter (A, B, … Z, AA, …)
+  static String _colLetter(int index) {
+    String result = '';
+    int n = index;
+    do {
+      result = String.fromCharCode(65 + (n % 26)) + result;
+      n = (n ~/ 26) - 1;
+    } while (n >= 0);
+    return result;
+  }
+
   Future<void> _updateOrderStatus(AppOrder order, String newStatus) async {
     final oldStatus = order.status;
     setState(() {
@@ -632,8 +704,10 @@ class HomeScreenState extends State<HomeScreen> {
       final api = await GoogleAuthService.getSheetsApi();
       if (api == null) throw Exception('API Call failed, not logged in.');
 
-      // Use dynamic column from mapping; fall back to 'F' for legacy sheets
-      final statusCol = _fieldToColumn['status'] ?? 'F';
+      // Use dynamic column from mapping. fetchData guarantees this exists.
+      final statusCol = _fieldToColumn['status'];
+      if (statusCol == null) throw Exception('Status column not found in mapping');
+      
       final range = '$statusCol${order.row}';
       final valueRange = sheets.ValueRange(values: [[newStatus]]);
 
@@ -1939,8 +2013,9 @@ class HomeScreenState extends State<HomeScreen> {
       final api = await GoogleAuthService.getSheetsApi();
       if (api == null) throw Exception('API Call failed, not logged in.');
 
-      final statusCol   = _fieldToColumn['status']   ?? 'F';
-      final trackingCol = _fieldToColumn['tracking']  ?? 'K';
+      final statusCol   = _fieldToColumn['status'];
+      final trackingCol = _fieldToColumn['tracking'];
+      if (statusCol == null || trackingCol == null) throw Exception('Status or Tracking column not found in mapping');
 
       final batchUpdate = sheets.BatchUpdateValuesRequest(
         valueInputOption: 'USER_ENTERED',
@@ -2057,10 +2132,16 @@ class HomeScreenState extends State<HomeScreen> {
             tooltip: 'تحديث',
           ),
           IconButton(
+            icon: const Icon(Icons.table_chart),
+            onPressed: _showSheetSelector,
+            color: const Color(0xFF10B981),
+            tooltip: 'تغيير الجدول',
+          ),
+          IconButton(
             icon: const Icon(Icons.logout),
             onPressed: _logout,
             color: Colors.redAccent,
-            tooltip: 'تغيير الجدول',
+            tooltip: 'تسجيل الخروج',
           ),
         ],
       ),
