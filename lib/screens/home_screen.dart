@@ -16,6 +16,7 @@ import '../services/ecotrack_service.dart';
 import '../services/shipping_provider_factory.dart';
 import 'staff_management_screen.dart';
 import 'setup_screen.dart';
+import '../services/column_mapper_service.dart';
 
 class _ShippingReadiness {
   final Map<String, String> normalizedValues;
@@ -52,6 +53,8 @@ class HomeScreenState extends State<HomeScreen> {
   String _defaultPrice = '';
   String _defaultProduct = '';
   bool isOwner = false;
+  /// Reverse of the column map: field key → column letter (e.g. 'status' → 'F')
+  Map<String, String> _fieldToColumn = {};
 
   @override
   void initState() {
@@ -125,35 +128,109 @@ class HomeScreenState extends State<HomeScreen> {
         return;
       }
 
-      // Read columns A to K.
+      // Read the entire sheet dynamically (no hardcoded range)
       final response = await api.spreadsheets.values.get(
         widget.spreadsheetId!,
-        'A:K',
+        'A:ZZ',
       );
       final rows = response.values ?? [];
+      if (rows.isEmpty) {
+        setState(() { allOrders = []; isLoading = false; });
+        return;
+      }
 
-      List<dynamic> parsedData = [];
+      // --- Step 1: Map headers from the first row ---
+      final headerRow = rows[0].map((h) => h.toString()).toList();
+      final columnMap = ColumnMapperService.mapHeaders(headerRow);
+
+      print('🗺️ Column mapping detected: $columnMap');
+
+      // Build reverse map: field → column letter (used for writes)
+      final newFieldToColumn = <String, String>{};
+      columnMap.forEach((letter, field) {
+        if (field != null) newFieldToColumn[field] = letter;
+      });
+
+      // --- Content-based fallback: detect status/tracking if headers didn't match ---
+      // Known status values that may appear in the data
+      const knownStatusValues = {
+        'confirm', 'no_response', 'canceled', 'uploaded', 'جديد',
+        'مؤكد', 'ملغى', 'لا إجابة', 'أرشيف', 'nouveau', 'confirmé',
+      };
+      final mappedLetters = newFieldToColumn.values.toSet();
+
+      if (!newFieldToColumn.containsKey('status')) {
+        for (int col = 0; col < headerRow.length; col++) {
+          final letter = _colLetter(col);
+          if (mappedLetters.contains(letter)) continue;
+          int hits = 0;
+          for (int row = 1; row < rows.length && row <= 10; row++) {
+            final r = rows[row];
+            if (col < r.length) {
+              final v = r[col].toString().trim().toLowerCase();
+              if (knownStatusValues.contains(v)) hits++;
+            }
+          }
+          if (hits > 0) {
+            newFieldToColumn['status'] = letter;
+            columnMap[letter] = 'status';
+            mappedLetters.add(letter);
+            print('✅ Content-based status detection: column $letter');
+            break;
+          }
+        }
+      }
+
+      // --- Auto-assign missing critical columns to the end of the sheet ---
+      Future<void> _ensureColumnExists(String field, String headerName) async {
+        if (!newFieldToColumn.containsKey(field)) {
+          int nextCol = headerRow.length;
+          while (mappedLetters.contains(_colLetter(nextCol))) nextCol++;
+          
+          final letter = _colLetter(nextCol);
+          newFieldToColumn[field] = letter;
+          columnMap[letter] = field;
+          mappedLetters.add(letter);
+          print('🆕 Auto-assigned $field to new column $letter');
+
+          // Write header to sheet so it's permanent
+          try {
+            final api = await GoogleAuthService.getSheetsApi();
+            if (api != null) {
+              await api.spreadsheets.values.update(
+                sheets.ValueRange(values: [[headerName]]),
+                widget.spreadsheetId!,
+                '${letter}1',
+                valueInputOption: 'USER_ENTERED',
+              );
+            }
+          } catch (_) {}
+        }
+      }
+
+      await _ensureColumnExists('status', 'Statut');
+      await _ensureColumnExists('tracking', 'Tracking');
+
+      setState(() { _fieldToColumn = newFieldToColumn; });
+
+      // --- Step 2: Parse each data row using the mapping ---
+      final List<dynamic> parsedData = [];
       for (int i = 1; i < rows.length; i++) {
-        // Start at 1 to skip headers
-        var r = rows[i];
-        // Ensure the row has enough columns (up to name at [2])
-        if (r.length >= 3 && r[2].toString().isNotEmpty) {
-          parsedData.add({
-            'row': i + 1, // original sheet row number
-            'date': r.isNotEmpty ? r[0] : "",
-            'time': r.length > 1 ? r[1] : "",
-            'name': r.length > 2 ? r[2] : "",
-            'wilaya': r.length > 3 ? r[3] : "",
-            'phone': r.length > 4 ? r[4] : "",
-            'status': r.length > 5 ? r[5] : "جديد",
-            'commune': r.length > 6 ? r[6] : "",
-            'address': r.length > 7 ? r[7] : "",
-            'product': r.length > 8 ? r[8] : "",
-            'price': r.length > 9 ? r[9] : "",
-            'trackingNumber': r.length > 10
-                ? (r[10].toString().isEmpty ? null : r[10].toString())
-                : null,
-          });
+        final r = rows[i];
+
+        // Build the order map using the detected column mapping
+        final orderMap = ColumnMapperService.rowToOrderMap(
+          dataRow: r,
+          columnMap: columnMap,
+          sheetRowNumber: i + 1,
+          columnMapping: columnMap,
+        );
+
+        // Only include rows that have at least a name or phone
+        final name = orderMap['name']?.toString() ?? '';
+        final phone = orderMap['phone']?.toString() ?? '';
+        if (name.isNotEmpty || phone.isNotEmpty) {
+          parsedData.add(orderMap);
         }
       }
 
@@ -596,6 +673,17 @@ class HomeScreenState extends State<HomeScreen> {
     return counts;
   }
 
+  /// Converts a 0-based column index to an Excel-style letter (A, B, … Z, AA, …)
+  static String _colLetter(int index) {
+    String result = '';
+    int n = index;
+    do {
+      result = String.fromCharCode(65 + (n % 26)) + result;
+      n = (n ~/ 26) - 1;
+    } while (n >= 0);
+    return result;
+  }
+
   Future<void> _updateOrderStatus(AppOrder order, String newStatus) async {
     final oldStatus = order.status;
     setState(() {
@@ -616,12 +704,12 @@ class HomeScreenState extends State<HomeScreen> {
       final api = await GoogleAuthService.getSheetsApi();
       if (api == null) throw Exception('API Call failed, not logged in.');
 
-      final range = 'F${order.row}'; // Column F holds the status
-      final valueRange = sheets.ValueRange(
-        values: [
-          [newStatus],
-        ],
-      );
+      // Use dynamic column from mapping. fetchData guarantees this exists.
+      final statusCol = _fieldToColumn['status'];
+      if (statusCol == null) throw Exception('Status column not found in mapping');
+      
+      final range = '$statusCol${order.row}';
+      final valueRange = sheets.ValueRange(values: [[newStatus]]);
 
       await api.spreadsheets.values.update(
         valueRange,
@@ -889,58 +977,40 @@ class HomeScreenState extends State<HomeScreen> {
       final api = await GoogleAuthService.getSheetsApi();
       if (api == null) throw Exception('API Call failed, not logged in.');
 
-      final batchUpdate = sheets.BatchUpdateValuesRequest(
-        valueInputOption: 'USER_ENTERED',
-        data: [
-          sheets.ValueRange(
-            range: 'C${order.row}',
-            values: [
-              [name],
-            ],
-          ),
-          sheets.ValueRange(
-            range: 'D${order.row}',
-            values: [
-              [wilaya],
-            ],
-          ),
-          sheets.ValueRange(
-            range: 'E${order.row}',
-            values: [
-              [phone],
-            ],
-          ),
-          sheets.ValueRange(
-            range: 'G${order.row}',
-            values: [
-              [commune],
-            ],
-          ),
-          sheets.ValueRange(
-            range: 'H${order.row}',
-            values: [
-              [address],
-            ],
-          ),
-          sheets.ValueRange(
-            range: 'I${order.row}',
-            values: [
-              [product],
-            ],
-          ),
-          sheets.ValueRange(
-            range: 'J${order.row}',
-            values: [
-              [price],
-            ],
-          ),
-        ],
-      );
+      // Build ranges dynamically using the detected column map.
+      final List<sheets.ValueRange> ranges = [];
 
-      await api.spreadsheets.values.batchUpdate(
-        batchUpdate,
-        widget.spreadsheetId!,
-      );
+      void addRange(String? col, dynamic value) {
+        if (col == null) return;
+        ranges.add(sheets.ValueRange(
+          range: '$col${order.row}',
+          values: [[value]],
+        ));
+      }
+
+      // Name: if sheet has separate firstName + name columns, split back
+      if (_fieldToColumn.containsKey('firstName') && _fieldToColumn.containsKey('name')) {
+        final parts = name.trim().split(' ');
+        addRange(_fieldToColumn['firstName'], parts.first);
+        addRange(_fieldToColumn['name'], parts.length > 1 ? parts.sublist(1).join(' ') : '');
+      } else {
+        addRange(_fieldToColumn['name'] ?? 'C', name);
+      }
+
+      addRange(_fieldToColumn['phone'] ?? 'E', phone);
+      addRange(_fieldToColumn['wilaya'] ?? 'D', wilaya);
+      addRange(_fieldToColumn['commune'] ?? 'G', commune);
+      if (_fieldToColumn.containsKey('address')) addRange(_fieldToColumn['address'], address);
+      if (_fieldToColumn.containsKey('product')) addRange(_fieldToColumn['product'], product);
+      if (_fieldToColumn.containsKey('price'))   addRange(_fieldToColumn['price'], price);
+
+      if (ranges.isNotEmpty) {
+        final batchUpdate = sheets.BatchUpdateValuesRequest(
+          valueInputOption: 'USER_ENTERED',
+          data: ranges,
+        );
+        await api.spreadsheets.values.batchUpdate(batchUpdate, widget.spreadsheetId!);
+      }
 
       setState(() {
         order.name = name;
@@ -1943,31 +2013,20 @@ class HomeScreenState extends State<HomeScreen> {
       final api = await GoogleAuthService.getSheetsApi();
       if (api == null) throw Exception('API Call failed, not logged in.');
 
-      // Update Column F (status) and K (tracking)
+      final statusCol   = _fieldToColumn['status'];
+      final trackingCol = _fieldToColumn['tracking'];
+      if (statusCol == null || trackingCol == null) throw Exception('Status or Tracking column not found in mapping');
+
       final batchUpdate = sheets.BatchUpdateValuesRequest(
         valueInputOption: 'USER_ENTERED',
         data: [
-          sheets.ValueRange(
-            range: 'F${order.row}',
-            values: [
-              [newStatus],
-            ],
-          ),
-          sheets.ValueRange(
-            range: 'K${order.row}',
-            values: [
-              [newTrackingNumber],
-            ],
-          ),
+          sheets.ValueRange(range: '$statusCol${order.row}',   values: [[newStatus]]),
+          sheets.ValueRange(range: '$trackingCol${order.row}', values: [[newTrackingNumber]]),
         ],
       );
 
-      await api.spreadsheets.values.batchUpdate(
-        batchUpdate,
-        widget.spreadsheetId!,
-      );
+      await api.spreadsheets.values.batchUpdate(batchUpdate, widget.spreadsheetId!);
     } catch (e) {
-      // Revert if API fails
       setState(() {
         order.status = oldStatus;
         order.trackingNumber = oldTracking;
@@ -2073,10 +2132,16 @@ class HomeScreenState extends State<HomeScreen> {
             tooltip: 'تحديث',
           ),
           IconButton(
+            icon: const Icon(Icons.table_chart),
+            onPressed: _showSheetSelector,
+            color: const Color(0xFF10B981),
+            tooltip: 'تغيير الجدول',
+          ),
+          IconButton(
             icon: const Icon(Icons.logout),
             onPressed: _logout,
             color: Colors.redAccent,
-            tooltip: 'تغيير الجدول',
+            tooltip: 'تسجيل الخروج',
           ),
         ],
       ),

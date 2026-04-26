@@ -259,32 +259,50 @@ class AlgeriaLocationService {
     final trimmed = value.trim();
     if (trimmed.isEmpty) return null;
 
-    // 1. Try to extract ID and match (handles "16 - Alger", "16 الجزائر", "16")
+    // 1. Numeric ID prefix ("16", "16 - Alger", "16. الجزائر")
     final idMatch = RegExp(r'^(\d+)').firstMatch(trimmed);
     if (idMatch != null) {
       final id = int.tryParse(idMatch.group(1)!);
-      if (id != null) {
+      if (id != null && id >= 1 && id <= 58) {
         final officialName = _getOfficialNameById(id);
         if (officialName != null) return officialName;
       }
     }
 
-    // 2. Try exact match in official Arabic names
-    if (_fallbackWilayaCodes.containsKey(trimmed)) {
-      return trimmed;
-    }
+    // 2. Exact match in official Arabic names
+    if (_fallbackWilayaCodes.containsKey(trimmed)) return trimmed;
 
-    // 3. Try exact match in aliases (e.g. "Alger" from API)
+    // 3. Exact match in runtime aliases (from API)
     if (_wilayaNameToId.containsKey(trimmed)) {
-      final id = _wilayaNameToId[trimmed]!;
-      return _getOfficialNameById(id);
+      return _getOfficialNameById(_wilayaNameToId[trimmed]!);
     }
 
-    // 4. Try normalized match (ignoring spaces, case, etc) using all aliases
-    final normalized = _normalize(trimmed);
+    final norm = _normalize(trimmed);
+
+    // 4. Normalized match against runtime aliases
     for (final entry in _wilayaNameToId.entries) {
-      if (_normalize(entry.key) == normalized) {
+      if (_normalize(entry.key) == norm) {
         return _getOfficialNameById(entry.value);
+      }
+    }
+
+    // 5. Exact match in Latin alias table
+    if (_latinAliases.containsKey(norm)) {
+      return _getOfficialNameById(_latinAliases[norm]!);
+    }
+
+    // 6. Fuzzy / contains match against Latin alias table
+    for (final entry in _latinAliases.entries) {
+      if (_fuzzyContains(norm, entry.key)) {
+        return _getOfficialNameById(entry.value);
+      }
+    }
+
+    // 7. Fuzzy / contains match against official Arabic names
+    for (final entry in _fallbackWilayaCodes.entries) {
+      final normKey = _normalize(entry.key.replaceFirst(RegExp(r'^\d+\.\s*'), ''));
+      if (_fuzzyContains(norm, normKey)) {
+        return entry.key;
       }
     }
 
@@ -298,19 +316,36 @@ class AlgeriaLocationService {
     if (normalizedWilaya == null) return null;
 
     final communes = _wilayaToCommunes[normalizedWilaya] ?? const <String>[];
-    
-    // Try exact match first
-    if (communes.contains(commune)) {
-      return commune;
+    if (communes.isEmpty) return null;
+
+    // 1. Exact match
+    if (communes.contains(commune)) return commune;
+
+    final norm = _normalize(commune);
+
+    // 2. Normalized exact match
+    for (final c in communes) {
+      if (_normalize(c) == norm) return c;
     }
 
-    // Try normalized match
-    final normalized = _normalize(commune);
+    // 3. Fuzzy / contains match
     for (final c in communes) {
-      if (_normalize(c) == normalized) {
-        return c;
+      if (_fuzzyContains(norm, _normalize(c))) return c;
+    }
+
+    // 4. Best partial: find commune that shares most tokens
+    String? bestMatch;
+    int bestScore = 0;
+    final inputTokens = norm.split(' ');
+    for (final c in communes) {
+      final cTokens = _normalize(c).split(' ');
+      final shared = inputTokens.where((t) => t.length > 2 && cTokens.contains(t)).length;
+      if (shared > bestScore) {
+        bestScore = shared;
+        bestMatch = c;
       }
     }
+    if (bestScore > 0) return bestMatch;
 
     return null;
   }
@@ -327,11 +362,159 @@ class AlgeriaLocationService {
     );
   }
 
+  // ---------------------------------------------------------------------------
+  // Latin / French aliases → wilaya ID  (covers all 58 wilayas)
+  // ---------------------------------------------------------------------------
+  static const Map<String, int> _latinAliases = {
+    // 01
+    'adrar': 1,
+    // 02
+    'chlef': 2, 'chleff': 2, 'el asnam': 2, 'asnam': 2, 'chelif': 2,
+    // 03
+    'laghouat': 3, 'aghwat': 3,
+    // 04
+    'oum el bouaghi': 4, 'oum bouaghi': 4, 'oum el baouaghi': 4,
+    // 05
+    'batna': 5,
+    // 06
+    'bejaia': 6, 'bjaia': 6, 'bgayet': 6, 'bgayeth': 6, 'bougie': 6, 'bejaie': 6,
+    // 07
+    'biskra': 7,
+    // 08
+    'bechar': 8,
+    // 09
+    'blida': 9, 'boulaida': 9,
+    // 10
+    'bouira': 10,
+    // 11
+    'tamanrasset': 11, 'tamanghasset': 11, 'tamanghast': 11, 'tam': 11,
+    // 12
+    'tebessa': 12,
+    // 13
+    'tlemcen': 13, 'tilimsen': 13, 'tlemsan': 13,
+    // 14
+    'tiaret': 14, 'tihert': 14,
+    // 15
+    'tizi ouzou': 15, 'tizi-ouzou': 15, 'tizi ouzu': 15, 'to': 15,
+    // 16
+    'alger': 16, 'algiers': 16, 'algers': 16, 'el djazair': 16, 'djazair': 16, 'algerie': 16,
+    // 17
+    'djelfa': 17,
+    // 18
+    'jijel': 18, 'djidjel': 18,
+    // 19
+    'setif': 19, 'setiff': 19,
+    // 20
+    'saida': 20,
+    // 21
+    'skikda': 21, 'philippeville': 21,
+    // 22
+    'sidi bel abbes': 22, 'sidi bel': 22, 'sba': 22,
+    // 23
+    'annaba': 23, 'bone': 23,
+    // 24
+    'guelma': 24,
+    // 25
+    'constantine': 25, 'qacentina': 25, 'qsentina': 25,
+    // 26
+    'medea': 26,
+    // 27
+    'mostaganem': 27, 'mustaganem': 27,
+    // 28
+    'msila': 28, "m'sila": 28, 'msilla': 28,
+    // 29
+    'mascara': 29,
+    // 30
+    'ouargla': 30, 'warqla': 30,
+    // 31
+    'oran': 31, 'wahran': 31, 'ouahran': 31,
+    // 32
+    'el bayadh': 32, 'bayadh': 32, 'el bayad': 32,
+    // 33
+    'illizi': 33,
+    // 34
+    'bordj bou arreridj': 34, 'bba': 34, 'bordj bouarreridj': 34,
+    // 35
+    'boumerdes': 35, 'boumerdas': 35,
+    // 36
+    'el tarf': 36, 'tarf': 36,
+    // 37
+    'tindouf': 37,
+    // 38
+    'tissemsilt': 38,
+    // 39
+    'el oued': 39, 'oued souf': 39, 'souf': 39, 'eloued': 39,
+    // 40
+    'khenchela': 40,
+    // 41
+    'souk ahras': 41, 'soukahras': 41,
+    // 42
+    'tipaza': 42, 'tipasa': 42,
+    // 43
+    'mila': 43,
+    // 44
+    'ain defla': 44, 'ain-defla': 44,
+    // 45
+    'naama': 45,
+    // 46
+    'ain temouchent': 46, 'ain temucent': 46,
+    // 47
+    'ghardaia': 47, 'ghardaya': 47,
+    // 48
+    'relizane': 48, 'rilizane': 48, 'ghilizane': 48,
+    // 49
+    'timimoun': 49,
+    // 50
+    'bordj badji mokhtar': 50, 'bbm': 50,
+    // 51
+    'ouled djellal': 51,
+    // 52
+    'beni abbes': 52, 'beni-abbes': 52,
+    // 53
+    'in salah': 53, 'insalah': 53,
+    // 54
+    'in guezzam': 54,
+    // 55
+    'touggourt': 55,
+    // 56
+    'djanet': 56,
+    // 57
+    'el mghair': 57, 'el meghaier': 57,
+    // 58
+    'el meniaa': 58, 'el menia': 58,
+  };
+
+  // ---------------------------------------------------------------------------
+  // Normalize: lower-case, strip accents/diacritics, collapse spaces
+  // ---------------------------------------------------------------------------
   static String _normalize(String value) {
-    return value
-        .trim()
-        .toLowerCase()
-        .replaceAll(RegExp(r'\s+'), ' ')
-        .replaceAll('ـ', '');
+    String s = value.trim().toLowerCase();
+    // Arabic diacritics
+    s = s.replaceAll(RegExp(r'[\u064B-\u065F\u0670]'), '');
+    // Arabic tatweel
+    s = s.replaceAll('\u0640', '');
+    // French accents → ASCII
+    const Map<String, String> accents = {
+      'é': 'e', 'è': 'e', 'ê': 'e', 'ë': 'e',
+      'à': 'a', 'â': 'a', 'ä': 'a',
+      'ù': 'u', 'û': 'u', 'ü': 'u',
+      'î': 'i', 'ï': 'i',
+      'ô': 'o', 'ö': 'o',
+      'ç': 'c',
+    };
+    accents.forEach((k, v) { s = s.replaceAll(k, v); });
+    // Collapse whitespace
+    s = s.replaceAll(RegExp(r'\s+'), ' ');
+    return s;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Fuzzy helpers
+  // ---------------------------------------------------------------------------
+
+  /// Returns true if [a] and [b] are close enough (one contains the other, ≥4 chars).
+  static bool _fuzzyContains(String a, String b) {
+    if (a.length < 4 || b.length < 4) return false;
+    return a.contains(b) || b.contains(a);
   }
 }
