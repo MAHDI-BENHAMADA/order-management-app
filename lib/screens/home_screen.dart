@@ -16,6 +16,7 @@ import '../services/ecotrack_service.dart';
 import '../services/shipping_provider_factory.dart';
 import 'staff_management_screen.dart';
 import 'setup_screen.dart';
+import '../services/column_mapper_service.dart';
 
 class _ShippingReadiness {
   final Map<String, String> normalizedValues;
@@ -125,35 +126,41 @@ class HomeScreenState extends State<HomeScreen> {
         return;
       }
 
-      // Read columns A to K.
+      // Read the entire sheet dynamically (no hardcoded range)
       final response = await api.spreadsheets.values.get(
         widget.spreadsheetId!,
-        'A:K',
+        'A:ZZ',
       );
       final rows = response.values ?? [];
+      if (rows.isEmpty) {
+        setState(() { allOrders = []; isLoading = false; });
+        return;
+      }
 
-      List<dynamic> parsedData = [];
+      // --- Step 1: Map headers from the first row ---
+      final headerRow = rows[0].map((h) => h.toString()).toList();
+      final columnMap = ColumnMapperService.mapHeaders(headerRow);
+
+      print('🗺️ Column mapping detected: $columnMap');
+
+      // --- Step 2: Parse each data row using the mapping ---
+      final List<dynamic> parsedData = [];
       for (int i = 1; i < rows.length; i++) {
-        // Start at 1 to skip headers
-        var r = rows[i];
-        // Ensure the row has enough columns (up to name at [2])
-        if (r.length >= 3 && r[2].toString().isNotEmpty) {
-          parsedData.add({
-            'row': i + 1, // original sheet row number
-            'date': r.isNotEmpty ? r[0] : "",
-            'time': r.length > 1 ? r[1] : "",
-            'name': r.length > 2 ? r[2] : "",
-            'wilaya': r.length > 3 ? r[3] : "",
-            'phone': r.length > 4 ? r[4] : "",
-            'status': r.length > 5 ? r[5] : "جديد",
-            'commune': r.length > 6 ? r[6] : "",
-            'address': r.length > 7 ? r[7] : "",
-            'product': r.length > 8 ? r[8] : "",
-            'price': r.length > 9 ? r[9] : "",
-            'trackingNumber': r.length > 10
-                ? (r[10].toString().isEmpty ? null : r[10].toString())
-                : null,
-          });
+        final r = rows[i];
+
+        // Build the order map using the detected column mapping
+        final orderMap = ColumnMapperService.rowToOrderMap(
+          dataRow: r,
+          columnMap: columnMap,
+          sheetRowNumber: i + 1,
+          columnMapping: columnMap,
+        );
+
+        // Only include rows that have at least a name or phone
+        final name = orderMap['name']?.toString() ?? '';
+        final phone = orderMap['phone']?.toString() ?? '';
+        if (name.isNotEmpty || phone.isNotEmpty) {
+          parsedData.add(orderMap);
         }
       }
 
