@@ -56,24 +56,27 @@ class AppOrder {
     for (var item in rawData) {
       final order = AppOrder.fromJson(item as Map<String, dynamic>);
 
-      if (!uniqueOrders.containsKey(order.phone)) {
-        uniqueOrders[order.phone] = order;
+      // Use phone as key; if empty, fall back to row number so rows are never collapsed
+      final key = order.phone.trim().isNotEmpty ? order.phone.trim() : 'row_${order.row}';
+
+      if (!uniqueOrders.containsKey(key)) {
+        uniqueOrders[key] = order;
       } else {
-        final existingOrder = uniqueOrders[order.phone]!;
+        final existingOrder = uniqueOrders[key]!;
         // Priority 1: The row with the most completed fields (Name + Phone + Wilaya).
         if (order.completionScore > existingOrder.completionScore) {
-          uniqueOrders[order.phone] = order;
+          uniqueOrders[key] = order;
         }
         // Priority 2: If data is equal, pick the newest entry (highest row index).
         else if (order.completionScore == existingOrder.completionScore &&
             order.row > existingOrder.row) {
-          uniqueOrders[order.phone] = order;
+          uniqueOrders[key] = order;
         }
       }
     }
 
     List<AppOrder> processedList = uniqueOrders.values.toList();
-    // Sort descending by row (newest first) - faster than compareTo
+    // Sort descending by row (newest first)
     processedList.sort((a, b) => b.row - a.row);
     return processedList;
   }
