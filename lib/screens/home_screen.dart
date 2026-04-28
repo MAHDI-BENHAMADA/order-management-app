@@ -2134,12 +2134,23 @@ class HomeScreenState extends State<HomeScreen> {
                 ? '${_defaultProduct.isNotEmpty ? _defaultProduct : 'منتج'} • ${_defaultPrice.isNotEmpty ? '$_defaultPrice د.ج' : 'بدون سعر'}'
                 : 'إعدادات المنتج',
           ),
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: fetchData,
-            color: const Color(0xFF10B981),
-            tooltip: 'تحديث',
-          ),
+          if (isOwner)
+            IconButton(
+              icon: const Icon(Icons.bar_chart),
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => StatsScreen(
+                      statusCounts: statusCounts,
+                      totalOrders: totalOrders,
+                    ),
+                  ),
+                );
+              },
+              color: const Color(0xFF10B981),
+              tooltip: 'الإحصائيات',
+            ),
           IconButton(
             icon: const Icon(Icons.table_chart),
             onPressed: _showSheetSelector,
@@ -2447,4 +2458,197 @@ class HomeScreenState extends State<HomeScreen> {
       ],
     );
   }
+}
+
+class StatsScreen extends StatelessWidget {
+  final Map<String, int> statusCounts;
+  final int totalOrders;
+
+  const StatsScreen({
+    super.key,
+    required this.statusCounts,
+    required this.totalOrders,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final total = totalOrders == 0 ? 1 : totalOrders;
+    final confirmed = statusCounts['confirm'] ?? 0;
+    final uploaded = statusCounts['uploaded'] ?? 0;
+    final canceled = statusCounts['canceled'] ?? 0;
+    final noResponse = statusCounts['no_response'] ?? 0;
+    final fresh = statusCounts['جديد'] ?? 0;
+    final pending = totalOrders - uploaded - canceled;
+
+    String percent(int value) => '${((value / total) * 100).toStringAsFixed(1)}%';
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('لوحة الإحصائيات'),
+      ),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          _buildHeroCard(totalOrders, percent(confirmed), confirmed),
+          const SizedBox(height: 16),
+          _buildGrid([
+            _StatCardData('مؤكد', confirmed, percent(confirmed), const Color(0xFF10B981)),
+            _StatCardData('أرشيف', uploaded, percent(uploaded), const Color(0xFF065F46)),
+            _StatCardData('ملغى', canceled, percent(canceled), Colors.redAccent),
+            _StatCardData('لا إجابة', noResponse, percent(noResponse), Colors.orangeAccent),
+            _StatCardData('جديد', fresh, percent(fresh), const Color(0xFF2563EB)),
+            _StatCardData('قيد المعالجة', pending, percent(pending), Colors.blueGrey),
+          ]),
+          const SizedBox(height: 24),
+          Text(
+            'نِسَب أساسية',
+            style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+            textAlign: TextAlign.right,
+          ),
+          const SizedBox(height: 12),
+          _buildRatioBar('نسبة التأكيد', confirmed, totalOrders, const Color(0xFF10B981)),
+          _buildRatioBar('نسبة الأرشفة', uploaded, totalOrders, const Color(0xFF065F46)),
+          _buildRatioBar('نسبة الإلغاء', canceled, totalOrders, Colors.redAccent),
+          _buildRatioBar('نسبة عدم الرد', noResponse, totalOrders, Colors.orangeAccent),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildHeroCard(int totalOrders, String confirmRate, int confirmed) {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(20),
+        gradient: const LinearGradient(
+          colors: [Color(0xFF10B981), Color(0xFF059669)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Text(
+            'ملخص سريع',
+            style: TextStyle(color: Colors.white70, fontSize: 14),
+            textAlign: TextAlign.right,
+          ),
+          const SizedBox(height: 8),
+          Text(
+            '$totalOrders طلب',
+            style: const TextStyle(color: Colors.white, fontSize: 28, fontWeight: FontWeight.bold),
+            textAlign: TextAlign.right,
+          ),
+          const SizedBox(height: 12),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                confirmRate,
+                style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold),
+              ),
+              Text(
+                'تأكيد: $confirmed',
+                style: const TextStyle(color: Colors.white70),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildGrid(List<_StatCardData> cards) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final isWide = constraints.maxWidth >= 600;
+        return GridView.count(
+          crossAxisCount: isWide ? 3 : 2,
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          mainAxisSpacing: 12,
+          crossAxisSpacing: 12,
+          childAspectRatio: 1.25,
+          children: cards.map(_buildStatCard).toList(),
+        );
+      },
+    );
+  }
+
+  Widget _buildStatCard(_StatCardData data) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(16),
+        color: Colors.white,
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.06),
+            blurRadius: 10,
+            offset: const Offset(0, 6),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(data.label, textAlign: TextAlign.right, style: const TextStyle(fontSize: 14, color: Colors.black54)),
+          const Spacer(),
+          Text(
+            '${data.value}',
+            textAlign: TextAlign.right,
+            style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: data.color),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            data.ratio,
+            textAlign: TextAlign.right,
+            style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildRatioBar(String label, int value, int totalOrders, Color color) {
+    final safeTotal = totalOrders == 0 ? 1 : totalOrders;
+    final ratio = value / safeTotal;
+    final percentText = '${(ratio * 100).toStringAsFixed(1)}%';
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(percentText, style: const TextStyle(fontWeight: FontWeight.bold)),
+              Text(label, textAlign: TextAlign.right),
+            ],
+          ),
+          const SizedBox(height: 6),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(8),
+            child: LinearProgressIndicator(
+              value: ratio,
+              color: color,
+              backgroundColor: Colors.grey.shade200,
+              minHeight: 10,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _StatCardData {
+  final String label;
+  final int value;
+  final String ratio;
+  final Color color;
+
+  const _StatCardData(this.label, this.value, this.ratio, this.color);
 }
