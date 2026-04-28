@@ -2250,6 +2250,17 @@ class HomeScreenState extends State<HomeScreen> {
                     ),
                   ),
                 ),
+                const SizedBox(width: 8),
+                IconButton(
+                  tooltip: 'إعداد رموز API',
+                  icon: const Icon(Icons.key),
+                  onPressed: () {
+                    showDialog(
+                      context: context,
+                      builder: (context) => const TokenStatusDialog(),
+                    );
+                  },
+                ),
               ],
             ),
             const SizedBox(height: 12),
