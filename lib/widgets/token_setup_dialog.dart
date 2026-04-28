@@ -71,13 +71,7 @@ class _TokenSetupDialogState extends State<TokenSetupDialog> {
   }
 
   String _getTokenKey(ShippingProvider provider) {
-    return switch (provider.integrationType) {
-      'ecotrack' => 'ecotrack_token',
-      'yalidine' => 'yalidine_token',
-      'yalitec' => 'yalitec_token',
-      'procolis' => 'procolis_token',
-      _ => 'ecotrack_token',
-    };
+    return 'provider_token_${provider.id}';
   }
 
   @override
@@ -144,70 +138,42 @@ class TokenStatusDialog extends StatefulWidget {
 }
 
 class _TokenStatusDialogState extends State<TokenStatusDialog> {
-  final Map<String, List<ShippingProvider>> _providersByType = {};
-  Map<String, bool> _statusByType = {};
+  final List<ShippingProvider> _providers = ShippingProvider.values;
+  Map<String, bool> _statusByProviderId = {};
   bool _isLoading = true;
 
   @override
   void initState() {
     super.initState();
-    _groupProviders();
     _loadTokenStatuses();
   }
 
-  void _groupProviders() {
-    for (final provider in ShippingProvider.values) {
-      _providersByType
-          .putIfAbsent(provider.integrationType, () => [])
-          .add(provider);
-    }
-  }
-
-  String _typeLabel(String type) {
-    return switch (type) {
-      'ecotrack' => 'EcoTrack',
-      'yalidine' => 'Yalidine',
-      'yalitec' => 'Yalitec',
-      'procolis' => 'Procolis',
-      _ => type,
-    };
-  }
-
-  String _getTokenKeyForType(String type) {
-    return switch (type) {
-      'ecotrack' => 'ecotrack_token',
-      'yalidine' => 'yalidine_token',
-      'yalitec' => 'yalitec_token',
-      'procolis' => 'procolis_token',
-      _ => 'ecotrack_token',
-    };
+  String _getTokenKey(ShippingProvider provider) {
+    return 'provider_token_${provider.id}';
   }
 
   Future<void> _loadTokenStatuses() async {
     final prefs = await SharedPreferences.getInstance();
     final statuses = <String, bool>{};
 
-    for (final type in _providersByType.keys) {
-      final tokenKey = _getTokenKeyForType(type);
+    for (final provider in _providers) {
+      final tokenKey = _getTokenKey(provider);
       final token = prefs.getString(tokenKey);
-      statuses[type] = token != null && token.trim().isNotEmpty;
+      statuses[provider.id] = token != null && token.trim().isNotEmpty;
     }
 
     if (!mounted) return;
     setState(() {
-      _statusByType = statuses;
+      _statusByProviderId = statuses;
       _isLoading = false;
     });
   }
 
-  Future<void> _openTokenSetup(String type) async {
-    final providers = _providersByType[type];
-    if (providers == null || providers.isEmpty) return;
-
+  Future<void> _openTokenSetup(ShippingProvider provider) async {
     await showDialog(
       context: context,
       builder: (context) => TokenSetupDialog(
-        provider: providers.first,
+        provider: provider,
         onTokenSaved: () {},
       ),
     );
@@ -228,15 +194,13 @@ class _TokenStatusDialogState extends State<TokenStatusDialog> {
                 shrinkWrap: true,
                 children: [
                   Text(
-                    'ملاحظة: كل مزود ضمن نفس التكامل يستخدم نفس الرمز.',
+                    'يمكنك ضبط رمز API لكل مزود بشكل مستقل.',
                     style: Theme.of(context).textTheme.bodySmall,
                     textAlign: TextAlign.right,
                   ),
                   const SizedBox(height: 12),
-                  ..._providersByType.entries.map((entry) {
-                    final type = entry.key;
-                    final providers = entry.value;
-                    final isSet = _statusByType[type] ?? false;
+                  ..._providers.map((provider) {
+                    final isSet = _statusByProviderId[provider.id] ?? false;
                     final statusText = isSet ? 'الرمز محفوظ' : 'غير مضبوط';
                     final statusColor = isSet ? const Color(0xFF10B981) : Colors.red;
 
@@ -251,7 +215,7 @@ class _TokenStatusDialogState extends State<TokenStatusDialog> {
                               children: [
                                 Expanded(
                                   child: Text(
-                                    _typeLabel(type),
+                                    provider.displayName,
                                     style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                                   ),
                                 ),
@@ -268,25 +232,15 @@ class _TokenStatusDialogState extends State<TokenStatusDialog> {
                                 ),
                                 const SizedBox(width: 8),
                                 TextButton(
-                                  onPressed: () => _openTokenSetup(type),
+                                  onPressed: () => _openTokenSetup(provider),
                                   child: Text(isSet ? 'تعديل' : 'تعيين'),
                                 ),
                               ],
                             ),
-                            const SizedBox(height: 8),
-                            const Text('يشمل:', textAlign: TextAlign.right),
                             const SizedBox(height: 6),
-                            Wrap(
-                              spacing: 6,
-                              runSpacing: 6,
-                              children: providers
-                                  .map(
-                                    (p) => Chip(
-                                      label: Text(p.displayName, textAlign: TextAlign.right),
-                                      backgroundColor: Colors.grey.shade100,
-                                    ),
-                                  )
-                                  .toList(),
+                            Text(
+                              provider.integrationType.toUpperCase(),
+                              style: TextStyle(color: Colors.grey[600], fontSize: 12),
                             ),
                           ],
                         ),

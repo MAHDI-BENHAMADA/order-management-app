@@ -1546,14 +1546,6 @@ class HomeScreenState extends State<HomeScreen> {
       final ready = await _ensureReadyForShipping(order, forEcoTrack: isEcoTrack);
       if (!ready) return;
 
-      // Validate and fix commune for EcoTrack providers
-      if (isEcoTrack) {
-        final communeOk = await _validateAndFixEcoTrackCommune(order);
-        if (!communeOk) return;
-      }
-
-      if (!mounted) return;
-
       // Get the appropriate API token from SharedPreferences
       final prefs = await SharedPreferences.getInstance();
       final tokenKey = _getTokenKeyForProvider(_selectedProvider);
@@ -1575,6 +1567,22 @@ class HomeScreenState extends State<HomeScreen> {
         );
         return;
       }
+
+      // Ensure EcoTrack service uses the correct token before validation
+      if (isEcoTrack) {
+        ShippingProviderFactory.initializeServiceForProvider(
+          _selectedProvider,
+          apiToken,
+        );
+      }
+
+      // Validate and fix commune for EcoTrack providers
+      if (isEcoTrack) {
+        final communeOk = await _validateAndFixEcoTrackCommune(order);
+        if (!communeOk) return;
+      }
+
+      if (!mounted) return;
 
       setState(() {
         _shippingRowsInProgress.add(order.row);
@@ -1779,21 +1787,28 @@ class HomeScreenState extends State<HomeScreen> {
             final prefs = await SharedPreferences.getInstance();
             final tokenKey = _getTokenKeyForProvider(_selectedProvider);
             final apiToken = prefs.getString(tokenKey);
-            
-            if (apiToken != null && apiToken.isNotEmpty) {
+
+            if (apiToken == null || apiToken.isEmpty) {
+              failCount++;
+            } else {
+              if (isEcoTrack) {
+                ShippingProviderFactory.initializeServiceForProvider(
+                  _selectedProvider,
+                  apiToken,
+                );
+              }
+
               setState(() => _shippingRowsInProgress.add(order.row));
-              
+
               final trackingNumber = await ShippingProviderFactory
                   .createShipmentWithSelectedProvider(order, apiToken);
-                  
+
               if (trackingNumber != null) {
                 await _updateTrackingAndStatus(order, trackingNumber, 'uploaded');
                 successCount++;
               } else {
                 failCount++;
               }
-            } else {
-              failCount++;
             }
           } else {
             failCount++;
@@ -1895,13 +1910,7 @@ class HomeScreenState extends State<HomeScreen> {
 
   /// Map provider to SharedPreferences token key
   String _getTokenKeyForProvider(ShippingProvider provider) {
-    return switch (provider.integrationType) {
-      'ecotrack' => 'ecotrack_token',
-      'yalidine' => 'yalidine_token',
-      'yalitec' => 'yalitec_token',
-      'procolis' => 'procolis_token',
-      _ => 'ecotrack_token', // fallback
-    };
+    return 'provider_token_${provider.id}';
   }
 
   Future<bool> _validateAndFixEcoTrackCommune(AppOrder order) async {
