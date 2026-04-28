@@ -24,9 +24,14 @@ class GoogleAuthService {
   }
 
   static Future<void> signOut() async {
-    SharedPreferences prefs = await SharedPreferences.getInstance();
+    final prefs = await SharedPreferences.getInstance();
     await prefs.clear();
-    await _googleSignIn.disconnect();
+    try {
+      await _googleSignIn.signOut();
+    } catch (_) {}
+    try {
+      await _googleSignIn.disconnect();
+    } catch (_) {}
   }
 
   static Future<AutoRefreshingAuthClient?> _getServiceAccountClient() async {

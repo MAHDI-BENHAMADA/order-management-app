@@ -9,6 +9,7 @@ class AppOrder {
   String address;
   String product;
   String price;
+  int stopDesk; // 0 = A domicile, 1 = Stop desk
   String? trackingNumber;
   String status; // Mutable for local state changes
 
@@ -23,6 +24,7 @@ class AppOrder {
     this.address = '',
     this.product = '',
     this.price = '',
+    this.stopDesk = 0,
     this.trackingNumber,
     required this.status,
   });
@@ -39,6 +41,9 @@ class AppOrder {
       address: json['address']?.toString() ?? '',
       product: json['product']?.toString() ?? '',
       price: json['price']?.toString() ?? '',
+      stopDesk: (json['stop_desk'] is int)
+          ? json['stop_desk'] as int
+          : int.tryParse(json['stop_desk']?.toString() ?? '') ?? 0,
       trackingNumber: json['trackingNumber']?.toString(),
       status: json['status'].toString(),
     );

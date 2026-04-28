@@ -53,6 +53,9 @@ class HomeScreenState extends State<HomeScreen> {
   String _defaultPrice = '';
   String _defaultProduct = '';
   bool isOwner = false;
+  bool _logoutInProgress = false;
+  static const int _stopDeskDomicile = 0;
+  static const int _stopDeskPointRelais = 1;
   /// Reverse of the column map: field key → column letter (e.g. 'status' → 'F')
   Map<String, String> _fieldToColumn = {};
 
@@ -234,14 +237,39 @@ class HomeScreenState extends State<HomeScreen> {
         }
       }
 
+      final processedOrders = AppOrder.processRawData(parsedData);
+      await _applyStopDeskSelections(processedOrders);
+
       setState(() {
-        allOrders = AppOrder.processRawData(parsedData);
+        allOrders = processedOrders;
       });
     } catch (e) {
       _showError('تعذر جلب البيانات: $e');
     } finally {
       setState(() => isLoading = false);
     }
+  }
+
+  String _stopDeskKey(int row) {
+    final sheetId = widget.spreadsheetId?.trim().isNotEmpty == true
+        ? widget.spreadsheetId!.trim()
+        : 'default';
+    return 'stop_desk_${sheetId}_$row';
+  }
+
+  Future<void> _applyStopDeskSelections(List<AppOrder> orders) async {
+    final prefs = await SharedPreferences.getInstance();
+    for (final order in orders) {
+      final value = prefs.getInt(_stopDeskKey(order.row));
+      order.stopDesk = value == _stopDeskPointRelais ? _stopDeskPointRelais : _stopDeskDomicile;
+    }
+  }
+
+  Future<void> _saveStopDeskSelection(AppOrder order, int value) async {
+    final prefs = await SharedPreferences.getInstance();
+    final normalized = value == _stopDeskPointRelais ? _stopDeskPointRelais : _stopDeskDomicile;
+    await prefs.setInt(_stopDeskKey(order.row), normalized);
+    order.stopDesk = normalized;
   }
 
   Future<void> _showSheetSelector() async {
@@ -283,12 +311,38 @@ class HomeScreenState extends State<HomeScreen> {
         return;
       }
 
-      // Fetch all Google Sheets from Drive
-      final fileList = await driveApi.files.list(
-        q: "mimeType='application/vnd.google-apps.spreadsheet'",
-        spaces: 'drive',
-        pageSize: 100,
-      );
+      drive.FileList fileList;
+      try {
+        fileList = await driveApi.files.list(
+          q: "mimeType='application/vnd.google-apps.spreadsheet'",
+          spaces: 'drive',
+          pageSize: 100,
+        );
+      } catch (e) {
+        if (e is drive.DetailedApiRequestError && e.status == 401 && isOwner) {
+          final user = await GoogleAuthService.signIn();
+          if (user == null) {
+            if (mounted) Navigator.pop(context);
+            _showError('يرجى تسجيل الدخول من جديد');
+            return;
+          }
+
+          final retryApi = await GoogleAuthService.getDriveApi();
+          if (retryApi == null) {
+            if (mounted) Navigator.pop(context);
+            _showError('تعذر إعادة الاتصال بـ Google Drive');
+            return;
+          }
+
+          fileList = await retryApi.files.list(
+            q: "mimeType='application/vnd.google-apps.spreadsheet'",
+            spaces: 'drive',
+            pageSize: 100,
+          );
+        } else {
+          rethrow;
+        }
+      }
 
       if (mounted) Navigator.pop(context); // Close loading dialog
 
@@ -625,12 +679,21 @@ class HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _logout() async {
-    await GoogleAuthService.signOut();
-    if (mounted) {
-      Navigator.pushReplacement(
-        context,
+    if (_logoutInProgress) return;
+    setState(() => _logoutInProgress = true);
+    try {
+      await GoogleAuthService.signOut();
+      if (!mounted) return;
+      Navigator.of(context).pushAndRemoveUntil(
         MaterialPageRoute(builder: (context) => SetupScreen()),
+        (route) => false,
       );
+    } catch (e) {
+      if (mounted) {
+        _showError('تعذر تسجيل الخروج: $e');
+      }
+    } finally {
+      if (mounted) setState(() => _logoutInProgress = false);
     }
   }
 
@@ -1105,6 +1168,8 @@ class HomeScreenState extends State<HomeScreen> {
       text: values['wilaya'] ?? '',
     );
 
+    int selectedStopDesk = order.stopDesk;
+
     String lastAutoAddress = _buildAutoAddress(wilayaController.text, communeController.text);
     if (addressController.text.isEmpty) {
       addressController.text = lastAutoAddress;
@@ -1275,6 +1340,17 @@ class HomeScreenState extends State<HomeScreen> {
                               ),
                               const SizedBox(height: 16),
                             ],
+                            if (showField('deliveryType')) ...[
+                              _buildDeliveryTypeDropdown(
+                                value: selectedStopDesk,
+                                onChanged: (value) {
+                                  setDialogState(() {
+                                    selectedStopDesk = value ?? _stopDeskDomicile;
+                                  });
+                                },
+                              ),
+                              const SizedBox(height: 16),
+                            ],
                             if (showField('product') || showField('price'))
                               Row(
                                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -1395,6 +1471,10 @@ class HomeScreenState extends State<HomeScreen> {
                                   showSuccessMessage: showSuccessMessage,
                                 );
 
+                                if (saved) {
+                                  await _saveStopDeskSelection(order, selectedStopDesk);
+                                }
+
                                 if (!saved || !dialogContext.mounted) return;
                                 Navigator.pop(dialogContext, true);
                               },
@@ -1458,6 +1538,35 @@ class HomeScreenState extends State<HomeScreen> {
           borderSide: const BorderSide(color: Color(0xFF10B981), width: 2),
         ),
         labelStyle: const TextStyle(fontSize: 14, color: Colors.black54),
+      ),
+    );
+  }
+
+  Widget _buildDeliveryTypeDropdown({
+    required int value,
+    required ValueChanged<int?> onChanged,
+  }) {
+    return DropdownButtonFormField<int>(
+      value: value,
+      isExpanded: true,
+      items: const [
+        DropdownMenuItem(value: _stopDeskDomicile, child: Text('A domicile')),
+        DropdownMenuItem(value: _stopDeskPointRelais, child: Text('Stop desk')),
+      ],
+      onChanged: onChanged,
+      decoration: InputDecoration(
+        labelText: 'Type de livraison',
+        prefixIcon: const Icon(Icons.local_shipping_outlined, size: 20, color: Colors.black45),
+        filled: true,
+        fillColor: Colors.grey[50],
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide(color: Colors.grey[200]!),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide(color: Colors.grey[200]!),
+        ),
       ),
     );
   }
@@ -2159,7 +2268,7 @@ class HomeScreenState extends State<HomeScreen> {
           ),
           IconButton(
             icon: const Icon(Icons.logout),
-            onPressed: _logout,
+            onPressed: _logoutInProgress ? null : _logout,
             color: Colors.redAccent,
             tooltip: 'تسجيل الخروج',
           ),

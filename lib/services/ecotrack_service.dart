@@ -430,6 +430,7 @@ class EcoTrackService {
         'montant': totalAmount, // Include shipping fees!
         'produit': product,
         'type': 1, // 1 = Livraison
+        'stop_desk': order.stopDesk, // 0 = A domicile, 1 = Stop desk
       };
 
       final uri = Uri.parse('$_baseUrl/create/order');
@@ -480,7 +481,18 @@ class EcoTrackService {
         // Validation error - parse and show details
         try {
           final errorData = jsonDecode(response.body);
-          final message = errorData['message'] ?? 'Validation error';
+          final message = errorData['message']?.toString() ?? 'Validation error';
+          final normalized = message.toLowerCase();
+          if (order.stopDesk == 1 &&
+              (normalized.contains('stop') ||
+                  normalized.contains('desk') ||
+                  normalized.contains('point relais') ||
+                  normalized.contains('relay') ||
+                  normalized.contains('stop_desk'))) {
+            throw Exception(
+              'هذه البلدية لا تدعم Stop desk. اختر A domicile او غيّر البلدية.',
+            );
+          }
           throw Exception('EcoTrack: $message');
         } catch (e) {
           throw Exception(
