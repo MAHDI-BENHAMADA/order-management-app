@@ -61,6 +61,62 @@ class EcoTrackService {
     }
   }
 
+  // Fetch all active products in stock from EcoTrack API
+  static Future<List<Map<String, dynamic>>> getProductsFromApi() async {
+    if (_apiToken == null) {
+      throw Exception('EcoTrack API Token not set');
+    }
+
+    try {
+      final uri = Uri.parse('$_baseUrl/get/products/list');
+
+      final response = await http
+          .get(
+            uri,
+            headers: {
+              'Authorization': 'Bearer $_apiToken',
+              'Accept': 'application/json',
+            },
+          )
+          .timeout(
+            const Duration(seconds: 10),
+            onTimeout: () => throw Exception('Products request timeout'),
+          );
+
+      print('EcoTrack Products Response Status: ${response.statusCode}');
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        List<Map<String, dynamic>> result = [];
+
+        // Handle response format
+        List<dynamic> productsList = [];
+        if (data is List) {
+          productsList = data;
+        } else if (data is Map && data['products'] is List) {
+          productsList = data['products'];
+        } else if (data is Map && data['data'] is List) {
+          productsList = data['data'];
+        }
+
+        for (var item in productsList) {
+          if (item is Map) {
+            result.add(item as Map<String, dynamic>);
+          }
+        }
+
+        print('✅ Fetched ${result.length} products from EcoTrack API');
+        return result;
+      } else {
+        print('Failed to get products: ${response.statusCode}');
+        return [];
+      }
+    } catch (e) {
+      print('Error getting products from API: $e');
+      return [];
+    }
+  }
+
   // Fetch all active wilayas from EcoTrack API
   static Future<List<Map<String, dynamic>>> getWilayasFromApi() async {
     if (_apiToken == null) {
@@ -431,7 +487,14 @@ class EcoTrackService {
         'produit': product,
         'type': 1, // 1 = Livraison
         'stop_desk': order.stopDesk, // 0 = A domicile, 1 = Stop desk
+        'stock': order.stock, // 0 = Non, 1 = Oui
+        'remarque': 'لا توجد ملاحظة',
+        'poids': 1,
       };
+
+      if (order.stock == 1) {
+        payload['quantite'] = (order.quantity > 0 ? order.quantity : 1).toString();
+      }
 
       final uri = Uri.parse('$_baseUrl/create/order');
 
@@ -491,6 +554,15 @@ class EcoTrackService {
                   normalized.contains('stop_desk'))) {
             throw Exception(
               'هذه البلدية لا تدعم Stop desk. اختر A domicile او غيّر البلدية.',
+            );
+          }
+          if (order.stock == 1 &&
+              (normalized.contains('stock') ||
+               normalized.contains('quantit') ||
+               normalized.contains('produit') ||
+               normalized.contains('product'))) {
+            throw Exception(
+              'خطأ في المخزون (Stock): $message. الرجاء التأكد من أن اسم المنتج (SKU) يطابق الموجود في EcoTrack.',
             );
           }
           throw Exception('EcoTrack: $message');

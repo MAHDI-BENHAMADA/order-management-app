@@ -5,26 +5,16 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'firebase_options.dart';
 import 'screens/home_screen.dart';
+import 'screens/splash_screen.dart';
 import 'screens/setup_screen.dart';
 
-void main() async {
+void main() {
   WidgetsFlutterBinding.ensureInitialized();
-  try {
-    await Firebase.initializeApp(
-      options: DefaultFirebaseOptions.currentPlatform,
-    );
-  } catch (e) {
-    debugPrint("Firebase init failed or already initialized");
-  }
-  SharedPreferences prefs = await SharedPreferences.getInstance();
-  String? spreadsheetId = prefs.getString('spreadsheetId');
-  runApp(OrderDashboardApp(initialSpreadsheetId: spreadsheetId));
+  runApp(const OrderDashboardApp());
 }
 
 class OrderDashboardApp extends StatelessWidget {
-  final String? initialSpreadsheetId;
-
-  const OrderDashboardApp({super.key, this.initialSpreadsheetId});
+  const OrderDashboardApp({super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -54,10 +44,58 @@ class OrderDashboardApp extends StatelessWidget {
           elevation: 0,
         ),
       ),
-      home: initialSpreadsheetId != null && initialSpreadsheetId!.isNotEmpty 
-            ? HomeScreen(spreadsheetId: initialSpreadsheetId!) 
-            : const SetupScreen(),
+      home: const _StartupGate(),
     );
   }
 }
 
+class _StartupGate extends StatefulWidget {
+  const _StartupGate();
+
+  @override
+  State<_StartupGate> createState() => _StartupGateState();
+}
+
+class _StartupGateState extends State<_StartupGate> {
+  String? _spreadsheetId;
+  bool _initialized = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _bootstrap();
+  }
+
+  Future<void> _bootstrap() async {
+    try {
+      await Firebase.initializeApp(
+        options: DefaultFirebaseOptions.currentPlatform,
+      );
+    } catch (e) {
+      debugPrint('Firebase init failed or already initialized');
+    }
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      _spreadsheetId = prefs.getString('spreadsheetId');
+    } catch (e) {
+      debugPrint('Failed to load startup preferences');
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _initialized = true;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_initialized) {
+      return const SplashScreen();
+    }
+
+    return _spreadsheetId != null && _spreadsheetId!.isNotEmpty
+        ? HomeScreen(spreadsheetId: _spreadsheetId!)
+        : const SetupScreen();
+  }
+}

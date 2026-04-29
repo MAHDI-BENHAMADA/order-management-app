@@ -1,0 +1,544 @@
+{{url}}/api/v1/validate/token?api_token={{api_token}}
+PARAMS
+api_token {{api_token}}
+ECOTRACK API
+L'API Public ECOTRACK vous permet d'utiliser le service sans passer par
+l'interface web et vous donne la possibilité de lier votre compte avec votre
+CRM, Plateforme E-commerce ou autres applications.
+Les fonctionnalités disponibles sont :
+L'ajout de commande
+La modification de commande
+L'ajout et la récupération des mises a jours sur l’état de livraison
+Demander le retour d'un colis
+Suivre l'avancement de livraison d'un colis
+Authorisation
+Pour consommer l'API il est nécessaire de générer un token à
+partir de votre compte ECOTRACK, ce token est un équivalent
+de votre nom d'utilisateur et mot de passe.
+Utiliser le token de l'API dans l'en-tête Autorisation autan que
+jeton Bearer.
+GET Vérification de validité d'un token
+Cet endpoint permet de vérifier si votre token est valide.
+Les retours possibles sont :
+{ 'success' : false, 'message' : 'INVALID_TOKEN'}  si le
+token est invalide
+{ 'success' : false, 'message' : 'TOKEN_NOT_ALLOWED'}
+Si l'accès a l'api public est désactivé pour ce compte
+{ 'success' : true, 'message' : 'VALID_TOKEN'}  Si le
+token est valide
+Taux limite
+Présentation des Limites de Taux
+Pour assurer la stabilité et la disponibilité de notre API, nous
+avons mis en place des limites de taux d'utilisation. Ces limites
+vous permettent d'effectuer un certain nombre de requêtes
+pendant une période définie.
+Notre API applique les limites suivantes :
+15 000 requêtes par jour par utilisateur ou adresse IP
+1 500 requêtes par heure par utilisateur ou adresse IP
+50 requêtes par minute par utilisateur ou adresse IP
+Comment suivre votre utilisation
+Chaque réponse de l'API contient des en-têtes spécifiques qui
+vous permettent de suivre votre consommation :
+En-têtes pour la limite journalière
+X-RateLimit-Limit-Day : Nombre total de requêtes
+autorisées par jour
+X-RateLimit-Remaining-Day : Nombre de requêtes
+restantes pour la journée
+X-RateLimit-Reset-Day : Timestamp Unix indiquant
+quand le compteur journalier sera réinitialisé
+En-têtes pour la limite horaire
+X-RateLimit-Limit-Hour : Nombre total de requêtes
+autorisées par heure
+X-RateLimit-Remaining-Hour : Nombre de requêtes
+restantes pour l'heure en cours
+X-RateLimit-Reset-Hour : Timestamp Unix indiquant
+quand le compteur horaire sera réinitialisé
+Que faire en cas de dépassement des
+limites
+Si vous dépassez l'une de ces limites, l'API renverra une
+réponse avec le code d'état HTTP 429 Too Many Requests
+et un message d'erreur expliquant quelle limite a été dépassée.
+La réponse contiendra également :
+Un message indiquant quand vous pourrez à nouveau
+effectuer des requêtes
+{{url}}/api/v1/
+L'en-tête Retry-After indiquant le nombre de
+secondes à attendre
+Bonnes pratiques
+Pour éviter de dépasser les limites de taux :
+ Surveillez votre utilisation en vérifiant régulièrement les
+en-têtes de limite
+ Espacez vos requêtes plutôt que de les envoyer en
+rafales
+ Mettez en cache les données que vous utilisez
+fréquemment
+ Implémentez une logique de backoff qui suspend
+temporairement les requêtes lorsque vous approchez des
+limites
+Exemple de réponse
+Pour toute question concernant les limites de taux ou si vous
+avez besoin de limites plus élevées pour un cas d'utilisation
+spécifique, n'hésitez pas à contacter notre équipe de support.
+Plain Text
+HTTP/1.1 200 OK
+Content-Type: application/json
+X-RateLimit-Limit: 50
+X-RateLimit-Limit-Remaining: 49
+X-RateLimit-Limit-Day: 15000
+X-RateLimit-Remaining-Day: 14950
+X-RateLimit-Reset-Day: 1710892800
+X-RateLimit-Limit-Hour: 1500
+X-RateLimit-Remaining-Hour: 1490
+X-RateLimit-Reset-Hour: 1710817200
+GET Taux limite
+Si vous envoyez plus de 50 requêtes par minute vous aurez la réponse
+suivante: 429 Too Many Request
+Commandes
+POST Ajouter une commande
+{{url}}/api/v1/create/order?reference&nom_client=&telephone=&tel
+ephone_2&adresse=&code_postal&commune=&code_wilaya=&mo
+ntant=&remarque&produit&stock&quantite&produit_a_recuperer&b
+outique&type=&stop_desk&weight&fragile&gps_link
+PARAMS
+reference
+nom_client
+telephone
+telephone_2
+adresse
+code_postal
+commune
+code_wilaya
+montant
+remarque
+produit
+Ce point de terminaison vous donne la possibilité d'ajouter des commandes
+sur votre compte ECOTRACK .
+Tous les types sont autorisés:
+Livraison
+Pick UP
+Échange
+Recouvrement.
+La requête est de type POST.
+Il n'est possible d'ajouter qu'une seule commande par requête.
+Le contenu de la requête est un tableau de paramètres, contenant votre
+token d'identification et les informations relatives à la commande.
+Reference de la commande | string , maximum
+255 caractéres , optionnel
+nom & prénom du destinataire | string ,
+maximum 255 caractéres , obligatoire
+numéro de téléphone du destinataire | numeric ,
+entre 9 et 10 chiffres , obligatoire
+numéro de téléphone du destinataire | numeric ,
+entre 9 et 10 chiffres , optionnel
+L'adresse de livraison | string , maximum 255
+caractéres , obligatoire
+Le code postal | numeric , optionnel
+Le nom de la commune | string , maximum 255
+caractéres , obligatoire
+Le code de la wilaya | integer , entre 1 et 58 ,
+obligatoire
+Le montant à récolter , incluant les frais de
+livraison| numeric , obligatoire
+Remarque ou consignes à propos du colis ou de
+la livraison.| string , maximum 255 caractéres ,
+optionnel
+Nom du/des produit(s) , Si la commande est
+préparée avec des produits stockés chez le
+stock
+quantite
+produit_a_recuperer
+boutique
+type
+stop_desk
+weight
+fragile
+gps_link
+{{url}}/api/v1/create/orders
+prestataire, les références des produits doivent
+être séparées par une virgule. ( Ex :
+prod001,prod052 ) | string , maximum 255
+caractéres , optionnel
+Si la commande sera préparée du stock [0 : non
+, 1 : oui] | integer , 0 ou 1
+Si la commande est avec stock, les quantités de
+chaque produit séparé par une virgule |
+obligatoire si stock = 1
+Produit à récuperer dans le cas d'un échange,
+maximum 255 caractéres , optionnel
+Nom de la boutique, si vous gérez plusieurs
+boutiques en amant | string , maximum 255
+caractéres , optionnel
+Type de l'operation [ 1 = Livraison , 2 = Echange
+, 3 = PICKUP , 4 = Recouvrement ] | integer ,
+entre 1 et 4 , obligatoire
+choix de la prestation Livraison à domicile ou
+bien collecte en Point relais et STOP DESK. [ 0 =
+a domicile , 1 = STOP DESK ] | integer , entre 0
+et 1 , optionnel
+Poids du colis, optionnel
+Si le colis contient des produits fragiles ,
+optionnel [ valeurs possibles 0 , 1 ]
+Lien de Localisation du client, optionnel
+POST Ajouter plusieurs commandes
+Ce point de terminaison vous donne la possibilité d'ajouter plusieurs
+commandes sur votre compte ECOTRACK .
+Tous les types sont autorisés:
+Livraison
+Pick UP
+Échange
+Recouvrement.
+La requête est de type POST.
+la limite est de 100 commandes par requette
+Le contenu de la requête est un tableau contenant les commandes
+Body raw (json)
+{{url}}/api/v1/update/order?tracking={{tracking}}&reference&client&
+tel&tel2&adresse=&code_postal&commune&wilaya=&montant=&re
+marque&product&boutique&type&stop_desk&fragile&gps_link
+json
+{
+                "orders": {
+                    "0": {
+                        "reference":"DEMO852",
+                        "nom_client": "client 1",
+                        "telephone": "0500000000",
+                        "telephone_2": "",
+                        "adresse": "17 rue med",
+                        "code_postal":"",
+                        "commune": "Oum Touyour",
+                        "code_wilaya": "5",
+                        "montant": "5000",
+                        "remarque": "test",
+                        "produit": "tesrty",
+                        "stock": 1,
+                        "quantite": "1",
+                        "produit_a_recuperer": "",
+                        "boutique" : "",
+                        "type": "1",
+                        "stop_desk":0,
+                        "weight": "2",
+                        "gps_link": "https://maps.app.goo.
+                    },
+                     "1": {
+                         "reference":"DEMO853",
+                        "nom_client": "client 2",
+                        "telephone": "0500000002",
+                        "telephone_2": "",
+                        "adresse": "17 rue med",
+                        "code_postal":"",
+                        "commune": "Oum Touyour",
+                        "code_wilaya": "5",
+                        "montant": "5000",
+                        "remarque": "test",
+                        "produit": "tesrty",
+                        "stock": 1,
+                        "quantite": "1",
+                        "produit_a_recuperer": "",
+                        "boutique" : "",
+                        "type": "1",
+                        "stop_desk":0,
+                        "weight": "2"
+                    }
+                }
+}
+POST Modifier une commande
+PARAMS
+tracking {{tracking}}
+reference
+client
+tel
+tel2
+adresse
+code_postal
+commune
+wilaya
+montant
+remarque
+product
+boutique
+type
+stop_desk
+Ce point de terminaison vous donne la possibilité d’apporter des
+modifications sur une commande après sa création et avant sa validation.
+L'identifiant unique de la commande |
+obligatoire
+Reference de la commande | string , maximum
+255 caractéres , optionel
+nom & prénom du destinataire | string ,
+maximum 255 caractéres , optionel
+numéro de téléphone du destinataire | numeric ,
+entre 9 et 10 chiffres , optionel
+numéro de téléphone du destinataire | numeric ,
+entre 9 et 10 chiffres , optionel
+L'adresse de livraison | string , maximum 255
+caractéres , optionel
+Le code postal | numeric , optionel
+Le nom de la commune | string , maximum 255
+caractéres , optionel
+Le code de la wilaya | integer , entre 1 et 58 ,
+optionel
+Le montant a récolté , incluant les frais de
+livraison| numeric , optionel
+Remarque ou consignes a propo du colis ou de
+la livraison | string , maximum 255 caractéres ,
+optionel
+Nom du/des produit(s) | string , maximum 255
+caractéres , optionel
+Nom de la boutique, si vous geré plusieurs
+boutiques en amant | string , maximum 255
+caractéres , optionel
+Type de l'operation [ 1 = Livraison , 2 = Echange
+, 3 = PICKUP , 4 = Recouvrement ] | integer ,
+entre 1 et 4 , optionel
+choix de la prestation Livraison a domicile ou
+bien collecte en Point relais et STOP DESK. [ 0 =
+a domicile , 1 = STOP DESK ] | integer , entre 0
+et 1 , optionel
+fragile
+gps_link
+{{url}}/api/v1/delete/order?tracking={{tracking}}
+PARAMS
+tracking {{tracking}}
+{{url}}/api/v1/valid/order?tracking={{tracking}}&ask_collection
+PARAMS
+tracking {{tracking}}
+ask_collection
+{{url}}/api/v1/get/order/label?tracking={{tracking}}
+Colis fragile. [ 0 = NON , 1 = OUI ] | integer ,
+entre 0 et 1 , optionel
+Lien de Localisation du client
+DELETE Supprimer une commande
+Ce point de terminaison vous donne la possibilité de supprimer la
+commande, tant que l’expédition n'est pas validée
+L'identifiant unique de la commande |
+obligatoire
+POST Expedier une commande
+Ce point de terminaison est utilisé pour valider et expédier une commande.
+NB: Après l’expédition de la commande il ne sera plus possible de modifier
+les informations ou de la supprimer.
+L'identifiant unique de la commande |
+obligatoire
+Demande de ramassage du colis | int , 1 =
+demander un ramassage , 0 = pas de
+remassage
+GET Télécharger l'étiquette
+PARAMS
+tracking {{tracking}}
+{{url}}/api/v1/add/maj?tracking={{tracking}}&content={{text}}
+PARAMS
+tracking {{tracking}}
+content {{text}}
+{{url}}/api/v1/get/maj?tracking={{tracking}}
+Ce point de terminaison est utilisé pour générer et télécharger l'étiquette
+spécifique à la commande.
+Le fichier retourné par cet appel est au format PDF
+L'identifiant unique de la commande |
+obligatoire
+Suivi des commandes
+POST Ajouter une information de suivi sur le colis
+Après expédition et pendant le process de livraison de votre commande
+vous pouvez ajouter des remarques sur le colis pour notifier la société de
+livraison sur un éventuel changement.
+Ce point de terminaison vous permet d'ajouter une mise à jour sur votre
+colis
+L'identifiant unique de la commande |
+obligatoire
+Contenu de la mise a jour | string , maximum :
+255 caractéres , obligatoire
+GET Liste des mise a jours appliquée sur un colis
+Il est possible de récupérer l’ensemble des mises a jours appliquées sur un
+colis. La liste contient les mises a jours appliquées par le livreur et / ou par
+l’expéditeur.
+Ce point de terminaison vous permet de récupérer la liste des mises à jours
+PARAMS
+tracking {{tracking}}
+{{url}}/api/v1/ask/for/order/return?tracking={{tracking}}
+PARAMS
+tracking {{tracking}}
+{{url}}/api/v1/get/tracking/info?tracking={{tracking}}
+L'identifiant unique de la commande |
+obligatoire
+POST Demander le retour d'un colis
+Si le colis est en livraison il est possible de soumettre une demande de
+retour, dans le cas contraire un code d'erreur vous sera renvoyé.
+NB: cette demande peut être ignorée par la société de livraison.
+Ce point de terminaison vous permet de demander le retour
+L'identifiant unique de la commande |
+obligatoire
+GET Suivi et historique des operations sur une
+commande
+Ce point de terminaison vous donne la possibilité de récupérer l'historique
+des opérations effectuées sur une commande.
+Les retours possibles pour activity sont :
+order_information_received_by_carrier : Commande enregistrée et
+validée par le vendeur
+picked: Commande récupérée par le prestataire de livraison
+accepted_by_carrier
+Commande réceptionnée par le centre de tri (Hub ou Station)
+dispatched_to_driver
+Commande dispatchée au livreur
+attempt_delivery
+Tentative de livraison
+return_asked
+Retour initié par le centre de tri (Hub ou Station)
+PARAMS
+tracking {{tracking}}
+{{url}}/api/v1/get/trackings/info?trackings[]=[{{tracking}},{{trackin
+g}}]
+return_in_transit
+Retour en transit
+Return_received
+Retour réceptionné par le vendeur
+livred
+Commande livrée
+encaissed
+Commande encaissée
+payed:
+Paiement effectué
+L'identifiant unique de la commande |
+obligatoire
+GET Suivi et historique des operations sur plusieurs
+commandes
+Ce point de terminaison vous donne la possibilité de récupérer l'historique
+des opérations effectuées sur un ensemble de commandes.
+Il est possible de soumettre un tableau de 100 trackings en une seule
+requête.
+Les retours possibles pour status sont :
+'Prêt à expédier'
+'Prêt à préparer'
+'En ramassage'
+'Stock en préparation'
+'Vers hub'
+'En hub'
+'Vers wilaya'
+'En préparation'
+'En livraison'
+'Suspendus'
+'Retours chez livreur'
+'Retours en traitement'
+'Retours prêts'
+'Retours reçu'
+'Retours à dispatcher vers stock'
+'Retours en transit stock'
+PARAMS
+trackings[] [{{tracking}},{{tracking}}]
+{{url}}/api/v1/get/orders?page={{int}}&start_date={{Y-m-d}}&end_d
+ate={{Y-m-d}}&tracking
+'Retours en stock'
+'Livre non encaissé'
+'Livre encaissé non payé'
+'Paiement prêt'
+'Paiement archivé'
+'Retours archivé'
+Les retours possibles pour activity sont :
+order_information_received_by_carrier : Commande enregistrée et
+validée par le vendeur
+picked: Commande récupérée par le prestataire de livraison
+accepted_by_carrier
+Commande réceptionnée par le centre de tri (Hub ou Station)
+dispatched_to_driver
+Commande dispatchée au livreur
+attempt_delivery
+Tentative de livraison
+return_asked
+Retour initié par le centre de tri (Hub ou Station)
+return_in_transit
+Retour en transit
+Return_received
+Retour réceptionné par le vendeur
+livred
+Commande livrée
+encaissed
+Commande encaissée
+payed:
+Paiement effectué
+tableau des trackings | obligatoire
+GET Liste des commandes avec status
+Ce point de terminaison vous donne la possibilité de récupérer la liste de
+vos commandes en process avec leurs statuts actuels.
+Les résultats sont affichés en pagination avec 40 commandes par page.
+Il est possible de naviguer entre les pages en utilisant le paramètre page.
+PARAMS
+page {{int}}
+start_date {{Y-m-d}}
+end_date {{Y-m-d}}
+tracking
+{{url}}/api/v1/get/orders/status?api_token={{token}}&trackings={{tr
+acking1}},{{tracking2}},{{tracking3}}&status={{status1}},{{status2}},
+{{status3}}
+Par défaut, le point de terminaison renvoie les commandes en process crée
+lors des derniers 90 jours, vous pouvez utiliser les paramètres start_date
+et end_date pour personnaliser la période selon vos besoins.
+Il est egalement possible de recuperer les information pour une commande
+uniquement en envoyant le parametre tracking dans la requette.
+NB: les commandes archivés sont exclut du retour des resultat pour ce
+point de terminaison
+page a afficher | int
+Filtre par date de creation de la commande | Y-
+m-d
+Filtre par date de creation de la commande | Y-
+m-d
+Tracking de la commande
+GET Filtre des commandes par status
+Ce point de terminaison vous donne la possibilité de filtrer la liste de vos
+commandes par leurs statuts .
+Le nombre maximum de trackings soumis est de 100 par requête.
+les statuts disponibles sont identique a l'affichage du menu sur votre
+compte expéditeur :
+prete_a_expedier,
+en_ramassage,
+en_preparation_stock,
+vers_hub,
+en_hub,
+vers_wilaya,
+en_preparation,
+en_livraison,
+suspendu,
+livre_non_encaisse,
+PARAMS
+api_token {{token}}
+trackings {{tracking1}},{{tracking2}},{{tracking3}}
+status {{status1}},{{status2}},{{status3}}
+{{url}}/api/v1/get/wilayas
+{{url}}/api/v1/get/communes?wilaya_id
+AUTHORIZATION Bearer Token
+Token <token>
+encaisse_non_paye,
+paiements_prets,
+paye_et_archive,
+retour_chez_livreur,
+retour_transit_entrepot,
+retour_en_traitement,
+retour_recu,
+retour_archive,
+annule
+all
+token généré a partir de votre compte |
+obligatoire
+trackings des commandes | string | obligatoire
+status des commandes | string | obligatoire
+Configuration
+GET Liste des wilayas actives
+Ce point de terminaison permet de récupérer la liste des wilayas livrable
+par la société de livraison.
+GET Liste des communes actives
+Ce point de terminaison permet de récupérer la liste des communes
+livrable par la société de livraison.
+PARAMS
+wilaya_id
+{{url}}/api/v1/get/fees
+{{url}}/api/v1/get/products/list
+AUTHORIZATION Bearer Token
+Token <token>
+Optionnel | Entre 1 et 58
+GET Tarifs des prestations
+Ce point de terminaison vous permet de récupérer les tarifs appliqués pour
+votre compte.
+Seuls les wilayas active seront retourné par la requête.
+Les tarifs sont appliqués séparément pour les prestations suivantes :
+Livraison (a domicile , stop desk)
+Pickup (a domicile , stop desk)
+Échange (a domicile , stop desk)
+Recouvrement (a domicile , stop desk)
+Retour (a domicile , stop desk)
+Produits
+GET Liste des produits
