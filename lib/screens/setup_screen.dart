@@ -3,7 +3,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../services/invite_service.dart';
 import '../utils/google_auth_service.dart';
 import 'home_screen.dart';
-import '../widgets/brand_logo.dart';
 
 class SetupScreen extends StatefulWidget {
   const SetupScreen({super.key});
@@ -105,7 +104,14 @@ class _SetupScreenState extends State<SetupScreen> {
             mainAxisAlignment: MainAxisAlignment.center,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const BrandLogo(size: 180, showWordmark: true),
+              SizedBox(
+                width: 180,
+                height: 180,
+                child: Image.asset(
+                  'assets/branding/logo.png',
+                  fit: BoxFit.contain,
+                ),
+              ),
               const SizedBox(height: 40),
 
               // Staff Login Area
