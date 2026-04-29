@@ -46,6 +46,7 @@ class HomeScreenState extends State<HomeScreen> {
   bool _locationDataReady = false;
   final Set<int> _shippingRowsInProgress = <int>{};
   List<AppOrder> allOrders = [];
+  List<Map<String, dynamic>> _ecoTrackProducts = [];
   bool isLoading = true;
   String? filterStatus; // null = show all
   String _searchQuery = '';
@@ -56,6 +57,9 @@ class HomeScreenState extends State<HomeScreen> {
   bool _logoutInProgress = false;
   static const int _stopDeskDomicile = 0;
   static const int _stopDeskPointRelais = 1;
+  static const int _stockNo = 0;
+  static const int _stockYes = 1;
+  static const int _stockQuantityDefault = 1;
   /// Reverse of the column map: field key → column letter (e.g. 'status' → 'F')
   Map<String, String> _fieldToColumn = {};
 
@@ -239,6 +243,8 @@ class HomeScreenState extends State<HomeScreen> {
 
       final processedOrders = AppOrder.processRawData(parsedData);
       await _applyStopDeskSelections(processedOrders);
+      await _applyStockSelections(processedOrders);
+      await _applyQuantitySelections(processedOrders);
 
       setState(() {
         allOrders = processedOrders;
@@ -270,6 +276,50 @@ class HomeScreenState extends State<HomeScreen> {
     final normalized = value == _stopDeskPointRelais ? _stopDeskPointRelais : _stopDeskDomicile;
     await prefs.setInt(_stopDeskKey(order.row), normalized);
     order.stopDesk = normalized;
+  }
+
+  String _stockKey(int row) {
+    final sheetId = widget.spreadsheetId?.trim().isNotEmpty == true
+        ? widget.spreadsheetId!.trim()
+        : 'default';
+    return 'stock_${sheetId}_$row';
+  }
+
+  Future<void> _applyStockSelections(List<AppOrder> orders) async {
+    final prefs = await SharedPreferences.getInstance();
+    for (final order in orders) {
+      final value = prefs.getInt(_stockKey(order.row));
+      order.stock = value == _stockYes ? _stockYes : _stockNo;
+    }
+  }
+
+  Future<void> _saveStockSelection(AppOrder order, int value) async {
+    final prefs = await SharedPreferences.getInstance();
+    final normalized = value == _stockYes ? _stockYes : _stockNo;
+    await prefs.setInt(_stockKey(order.row), normalized);
+    order.stock = normalized;
+  }
+
+  String _quantityKey(int row) {
+    final sheetId = widget.spreadsheetId?.trim().isNotEmpty == true
+        ? widget.spreadsheetId!.trim()
+        : 'default';
+    return 'quantity_${sheetId}_$row';
+  }
+
+  Future<void> _applyQuantitySelections(List<AppOrder> orders) async {
+    final prefs = await SharedPreferences.getInstance();
+    for (final order in orders) {
+      final value = prefs.getInt(_quantityKey(order.row));
+      order.quantity = value ?? _stockQuantityDefault;
+    }
+  }
+
+  Future<void> _saveQuantitySelection(AppOrder order, int value) async {
+    final prefs = await SharedPreferences.getInstance();
+    final normalized = value > 0 ? value : _stockQuantityDefault;
+    await prefs.setInt(_quantityKey(order.row), normalized);
+    order.quantity = normalized;
   }
 
   Future<void> _showSheetSelector() async {
@@ -1120,6 +1170,26 @@ class HomeScreenState extends State<HomeScreen> {
     Map<String, String>? initialValues,
     bool showSuccessMessage = true,
   }) async {
+    // Fetch ecotrack products if we are using ecotrack
+    if (_selectedProvider.integrationType == 'ecotrack' && _ecoTrackProducts.isEmpty) {
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        final tokenKey = _getTokenKeyForProvider(_selectedProvider);
+        final apiToken = prefs.getString(tokenKey) ?? prefs.getString('ecotrack_token');
+        if (apiToken != null && apiToken.isNotEmpty) {
+          ShippingProviderFactory.initializeServiceForProvider(_selectedProvider, apiToken);
+          final products = await EcoTrackService.getProductsFromApi();
+          if (mounted) {
+            setState(() {
+              _ecoTrackProducts = products;
+            });
+          }
+        }
+      } catch (e) {
+        print('Error fetching ecotrack products: $e');
+      }
+    }
+
     // Use defaults when order has no product/price set
     final effectiveProduct = order.product.trim().isNotEmpty
         ? order.product
@@ -1169,6 +1239,11 @@ class HomeScreenState extends State<HomeScreen> {
     );
 
     int selectedStopDesk = order.stopDesk;
+    int selectedStock = order.stock;
+    final quantityController = TextEditingController(
+      text: (order.quantity > 0 ? order.quantity : _stockQuantityDefault)
+          .toString(),
+    );
 
     String lastAutoAddress = _buildAutoAddress(wilayaController.text, communeController.text);
     if (addressController.text.isEmpty) {
@@ -1351,6 +1426,26 @@ class HomeScreenState extends State<HomeScreen> {
                               ),
                               const SizedBox(height: 16),
                             ],
+                            if (showField('stock')) ...[
+                              _buildStockDropdown(
+                                value: selectedStock,
+                                onChanged: (value) {
+                                  setDialogState(() {
+                                    selectedStock = value ?? _stockNo;
+                                    if (selectedStock == _stockYes &&
+                                        quantityController.text.trim().isEmpty) {
+                                      quantityController.text =
+                                          _stockQuantityDefault.toString();
+                                    }
+                                  });
+                                },
+                              ),
+                              const SizedBox(height: 16),
+                            ],
+                            if (showField('stock') && selectedStock == _stockYes) ...[
+                              _buildQuantityField(controller: quantityController),
+                              const SizedBox(height: 16),
+                            ],
                             if (showField('product') || showField('price'))
                               Row(
                                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -1358,12 +1453,20 @@ class HomeScreenState extends State<HomeScreen> {
                                   if (showField('product'))
                                     Expanded(
                                       flex: 2,
-                                      child: _buildModernTextField(
-                                        controller: productController,
-                                        label: 'المنتج',
-                                        icon: Icons.inventory_2_outlined,
-                                        textDirection: TextDirection.rtl,
-                                      ),
+                                      child: (selectedStock == _stockYes && _ecoTrackProducts.isNotEmpty)
+                                          ? _buildProductAutocomplete(
+                                              controller: productController,
+                                              products: _ecoTrackProducts,
+                                              onSelected: (val) {
+                                                productController.text = val;
+                                              },
+                                            )
+                                          : _buildModernTextField(
+                                              controller: productController,
+                                              label: 'المنتج',
+                                              icon: Icons.inventory_2_outlined,
+                                              textDirection: TextDirection.rtl,
+                                            ),
                                     ),
                                   if (showField('product') && showField('price'))
                                     const SizedBox(width: 12),
@@ -1473,6 +1576,18 @@ class HomeScreenState extends State<HomeScreen> {
 
                                 if (saved) {
                                   await _saveStopDeskSelection(order, selectedStopDesk);
+                                  await _saveStockSelection(order, selectedStock);
+                                  if (selectedStock == _stockYes) {
+                                    final parsed = int.tryParse(
+                                      quantityController.text.trim(),
+                                    );
+                                    await _saveQuantitySelection(
+                                      order,
+                                      parsed ?? _stockQuantityDefault,
+                                    );
+                                  } else {
+                                    await _saveQuantitySelection(order, 0);
+                                  }
                                 }
 
                                 if (!saved || !dialogContext.mounted) return;
@@ -1542,6 +1657,92 @@ class HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  Widget _buildProductAutocomplete({
+    required TextEditingController controller,
+    required List<Map<String, dynamic>> products,
+    required ValueChanged<String> onSelected,
+  }) {
+    return Autocomplete<Map<String, dynamic>>(
+      initialValue: TextEditingValue(text: controller.text),
+      displayStringForOption: (option) => option['reference']?.toString() ?? option['name']?.toString() ?? '',
+      optionsBuilder: (TextEditingValue textEditingValue) {
+        if (textEditingValue.text.isEmpty) {
+          return products;
+        }
+        return products.where((product) {
+          final ref = product['reference']?.toString().toLowerCase() ?? '';
+          final name = product['name']?.toString().toLowerCase() ?? '';
+          final search = textEditingValue.text.toLowerCase();
+          return ref.contains(search) || name.contains(search);
+        });
+      },
+      onSelected: (Map<String, dynamic> selection) {
+        onSelected(selection['reference']?.toString() ?? '');
+      },
+      fieldViewBuilder: (context, textEditingController, focusNode, onFieldSubmitted) {
+        // Keep main controller in sync if user types manually
+        textEditingController.addListener(() {
+          if (textEditingController.text != controller.text) {
+             controller.text = textEditingController.text;
+          }
+        });
+        
+        return TextField(
+          controller: textEditingController,
+          focusNode: focusNode,
+          textDirection: TextDirection.ltr,
+          decoration: InputDecoration(
+            labelText: 'المنتج (اختر من المخزون)',
+            prefixIcon: const Icon(Icons.inventory_2_outlined, size: 20, color: Colors.black45),
+            filled: true,
+            fillColor: Colors.grey[50],
+            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: BorderSide(color: Colors.grey[200]!),
+            ),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: BorderSide(color: Colors.grey[200]!),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: const BorderSide(color: Color(0xFF10B981), width: 2),
+            ),
+            labelStyle: const TextStyle(fontSize: 14, color: Colors.black54),
+          ),
+        );
+      },
+      optionsViewBuilder: (context, onSelectedInternal, options) {
+        return Align(
+          alignment: Alignment.topLeft,
+          child: Material(
+            elevation: 4.0,
+            borderRadius: BorderRadius.circular(12),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 250, maxWidth: 300),
+              child: ListView.builder(
+                padding: EdgeInsets.zero,
+                shrinkWrap: true,
+                itemCount: options.length,
+                itemBuilder: (BuildContext context, int index) {
+                  final option = options.elementAt(index);
+                  return ListTile(
+                    title: Text(option['reference']?.toString() ?? ''),
+                    subtitle: Text(option['name']?.toString() ?? ''),
+                    onTap: () {
+                      onSelectedInternal(option);
+                    },
+                  );
+                },
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   Widget _buildDeliveryTypeDropdown({
     required int value,
     required ValueChanged<int?> onChanged,
@@ -1567,6 +1768,64 @@ class HomeScreenState extends State<HomeScreen> {
           borderRadius: BorderRadius.circular(12),
           borderSide: BorderSide(color: Colors.grey[200]!),
         ),
+      ),
+    );
+  }
+
+  Widget _buildStockDropdown({
+    required int value,
+    required ValueChanged<int?> onChanged,
+  }) {
+    return DropdownButtonFormField<int>(
+      value: value,
+      isExpanded: true,
+      items: const [
+        DropdownMenuItem(value: _stockNo, child: Text('Stock: Non')),
+        DropdownMenuItem(value: _stockYes, child: Text('Stock: Oui')),
+      ],
+      onChanged: onChanged,
+      decoration: InputDecoration(
+        labelText: 'Préparé du stock',
+        prefixIcon: const Icon(Icons.inventory_2_outlined, size: 20, color: Colors.black45),
+        filled: true,
+        fillColor: Colors.grey[50],
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide(color: Colors.grey[200]!),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide(color: Colors.grey[200]!),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildQuantityField({
+    required TextEditingController controller,
+  }) {
+    return TextField(
+      controller: controller,
+      keyboardType: TextInputType.number,
+      decoration: InputDecoration(
+        labelText: 'Quantite',
+        prefixIcon: const Icon(Icons.confirmation_number_outlined, size: 20, color: Colors.black45),
+        filled: true,
+        fillColor: Colors.grey[50],
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide(color: Colors.grey[200]!),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide(color: Colors.grey[200]!),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(color: Color(0xFF10B981), width: 2),
+        ),
+        labelStyle: const TextStyle(fontSize: 14, color: Colors.black54),
       ),
     );
   }
