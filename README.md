@@ -33,7 +33,16 @@ A mobile-first Flutter app for sellers to manage and track orders directly from 
 flutter pub get
 ```
 
-### 3. Run the App
+### 3. Configure Firebase Functions
+If you want the app to keep auto-sharing selected sheets without shipping credentials in the APK, configure the backend email lookup:
+```bash
+cd functions
+npm install
+firebase functions:config:set app.service_account_email="YOUR_SERVICE_ACCOUNT_EMAIL"
+firebase deploy --only functions
+```
+
+### 4. Run the App
 ```bash
 flutter run
 ```

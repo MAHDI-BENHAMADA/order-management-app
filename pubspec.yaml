@@ -39,7 +39,6 @@ flutter:
 
   assets:
     - communes.json
-    - assets/service_account.json
     - assets/branding/logo.png
     - assets/branding/splash.png
 

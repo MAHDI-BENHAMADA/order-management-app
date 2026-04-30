@@ -10,13 +10,12 @@ import '../widgets/order_card.dart';
 import '../widgets/token_setup_dialog.dart';
 import '../utils/algeria_location_service.dart';
 import '../utils/google_auth_service.dart';
-import 'dart:convert';
-import 'package:flutter/services.dart';
 import '../services/ecotrack_service.dart';
 import '../services/shipping_provider_factory.dart';
 import 'staff_management_screen.dart';
 import 'setup_screen.dart';
 import '../services/column_mapper_service.dart';
+import '../services/staff_sheets_service.dart';
 
 class _ShippingReadiness {
   final Map<String, String> normalizedValues;
@@ -62,6 +61,45 @@ class HomeScreenState extends State<HomeScreen> {
   static const int _stockQuantityDefault = 1;
   /// Reverse of the column map: field key → column letter (e.g. 'status' → 'F')
   Map<String, String> _fieldToColumn = {};
+
+
+  Future<List<List<dynamic>>> _sheetsGet(String range) async {
+    if (isOwner) {
+      final api = await GoogleAuthService.getSheetsApi();
+      if (api == null) throw Exception('API Call failed, not logged in.');
+      final response = await api.spreadsheets.values.get(widget.spreadsheetId!, range);
+      return (response.values ?? []).map((e) => e as List<dynamic>).toList();
+    } else {
+      final response = await StaffSheetsService.getValues(widget.spreadsheetId!, range);
+      return (response.values ?? []).map((e) => e as List<dynamic>).toList();
+    }
+  }
+
+  Future<void> _sheetsUpdate(String range, List<List<dynamic>> values) async {
+    if (isOwner) {
+      final api = await GoogleAuthService.getSheetsApi();
+      if (api == null) throw Exception('API Call failed, not logged in.');
+      await api.spreadsheets.values.update(
+        sheets.ValueRange(values: values),
+        widget.spreadsheetId!,
+        range,
+        valueInputOption: 'USER_ENTERED',
+      );
+    } else {
+      await StaffSheetsService.updateValues(widget.spreadsheetId!, range, sheets.ValueRange(values: values));
+    }
+  }
+
+  Future<void> _sheetsBatchUpdate(sheets.BatchUpdateValuesRequest request) async {
+    if (isOwner) {
+      final api = await GoogleAuthService.getSheetsApi();
+      if (api == null) throw Exception('API Call failed, not logged in.');
+      await api.spreadsheets.values.batchUpdate(request, widget.spreadsheetId!);
+    } else {
+      await StaffSheetsService.batchUpdate(widget.spreadsheetId!, request);
+    }
+  }
+
 
   @override
   void initState() {
@@ -128,19 +166,15 @@ class HomeScreenState extends State<HomeScreen> {
 
     setState(() => isLoading = true);
     try {
-      final api = await GoogleAuthService.getSheetsApi();
-      if (api == null) {
+      // Read the entire sheet dynamically (no hardcoded range)
+      List<List<dynamic>> rows;
+      try {
+        rows = await _sheetsGet('A:ZZ');
+      } catch (e) {
         _showError('خطأ: لم يتم تسجيل الدخول بصلاحيات كافية.');
         await _logout();
         return;
       }
-
-      // Read the entire sheet dynamically (no hardcoded range)
-      final response = await api.spreadsheets.values.get(
-        widget.spreadsheetId!,
-        'A:ZZ',
-      );
-      final rows = response.values ?? [];
       if (rows.isEmpty) {
         setState(() { allOrders = []; isLoading = false; });
         return;
@@ -202,15 +236,7 @@ class HomeScreenState extends State<HomeScreen> {
 
           // Write header to sheet so it's permanent
           try {
-            final api = await GoogleAuthService.getSheetsApi();
-            if (api != null) {
-              await api.spreadsheets.values.update(
-                sheets.ValueRange(values: [[headerName]]),
-                widget.spreadsheetId!,
-                '${letter}1',
-                valueInputOption: 'USER_ENTERED',
-              );
-            }
+            await _sheetsUpdate('${letter}1', [[headerName]]);
           } catch (_) {}
         }
       }
@@ -515,31 +541,27 @@ class HomeScreenState extends State<HomeScreen> {
         await prefs.setString('spreadsheetId', selectedFile.id!);
 
         if (!mounted) return;
-        
-        // --- Automatically share the sheet with the Service Account ---
-        try {
-          final jsonString = await rootBundle.loadString('assets/service_account.json');
-          final serviceAccount = jsonDecode(jsonString);
-          final clientEmail = serviceAccount['client_email'];
 
-          if (clientEmail != null) {
+        // Keep the sheet-sharing flow, but fetch the service account address from the backend.
+        try {
+          final serviceAccountEmail = await GoogleAuthService.getServiceAccountEmail();
+          if (serviceAccountEmail != null && serviceAccountEmail.isNotEmpty) {
             final permission = drive.Permission(
               type: 'user',
               role: 'writer',
-              emailAddress: clientEmail,
+              emailAddress: serviceAccountEmail,
             );
-            
+
             await driveApi.permissions.create(
-              permission, 
-              selectedFile.id!, 
-              sendNotificationEmail: false
+              permission,
+              selectedFile.id!,
+              sendNotificationEmail: false,
             );
-            print('Successfully shared sheet with service account: $clientEmail');
+            print('Successfully shared sheet with service account: $serviceAccountEmail');
           }
         } catch (e) {
           print('Could not auto-share sheet: $e');
         }
-        // -------------------------------------------------------------
 
         // Prompt for product settings right after choosing the sheet
         await _showProductSettingsDialog(selectedFile.id!, isInitialSetup: true);
@@ -814,22 +836,12 @@ class HomeScreenState extends State<HomeScreen> {
     }
 
     try {
-      final api = await GoogleAuthService.getSheetsApi();
-      if (api == null) throw Exception('API Call failed, not logged in.');
-
       // Use dynamic column from mapping. fetchData guarantees this exists.
       final statusCol = _fieldToColumn['status'];
       if (statusCol == null) throw Exception('Status column not found in mapping');
       
       final range = '$statusCol${order.row}';
-      final valueRange = sheets.ValueRange(values: [[newStatus]]);
-
-      await api.spreadsheets.values.update(
-        valueRange,
-        widget.spreadsheetId!,
-        range,
-        valueInputOption: 'USER_ENTERED',
-      );
+      await _sheetsUpdate(range, [[newStatus]]);
     } catch (e) {
       // Revert if API fails
       setState(() {
@@ -1087,9 +1099,6 @@ class HomeScreenState extends State<HomeScreen> {
     bool showSuccessMessage = true,
   }) async {
     try {
-      final api = await GoogleAuthService.getSheetsApi();
-      if (api == null) throw Exception('API Call failed, not logged in.');
-
       // Build ranges dynamically using the detected column map.
       final List<sheets.ValueRange> ranges = [];
 
@@ -1122,7 +1131,7 @@ class HomeScreenState extends State<HomeScreen> {
           valueInputOption: 'USER_ENTERED',
           data: ranges,
         );
-        await api.spreadsheets.values.batchUpdate(batchUpdate, widget.spreadsheetId!);
+        await _sheetsBatchUpdate(batchUpdate);
       }
 
       setState(() {
@@ -2387,9 +2396,6 @@ class HomeScreenState extends State<HomeScreen> {
     });
 
     try {
-      final api = await GoogleAuthService.getSheetsApi();
-      if (api == null) throw Exception('API Call failed, not logged in.');
-
       final statusCol   = _fieldToColumn['status'];
       final trackingCol = _fieldToColumn['tracking'];
       if (statusCol == null || trackingCol == null) throw Exception('Status or Tracking column not found in mapping');
@@ -2402,7 +2408,7 @@ class HomeScreenState extends State<HomeScreen> {
         ],
       );
 
-      await api.spreadsheets.values.batchUpdate(batchUpdate, widget.spreadsheetId!);
+      await _sheetsBatchUpdate(batchUpdate);
     } catch (e) {
       setState(() {
         order.status = oldStatus;

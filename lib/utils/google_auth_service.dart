@@ -1,13 +1,16 @@
 import 'dart:convert';
-import 'package:flutter/services.dart';
+
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:googleapis/sheets/v4.dart' as sheets;
 import 'package:googleapis/drive/v3.dart' as drive;
-import 'package:googleapis_auth/auth_io.dart';
+import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'google_auth_client.dart';
 
 class GoogleAuthService {
+  static const String _serviceAccountEmailUrl =
+      'https://sheets-backend-6aoikb9wv-walidbenxyz-3942s-projects.vercel.app/api/getServiceAccountEmail';
+
   static final GoogleSignIn _googleSignIn = GoogleSignIn(
     scopes: [
       sheets.SheetsApi.spreadsheetsScope, // Request permission to read/write spreadsheets
@@ -34,32 +37,11 @@ class GoogleAuthService {
     } catch (_) {}
   }
 
-  static Future<AutoRefreshingAuthClient?> _getServiceAccountClient() async {
-    try {
-      final jsonString = await rootBundle.loadString('assets/service_account.json');
-      final credentials = ServiceAccountCredentials.fromJson(jsonDecode(jsonString));
-      
-      final client = await clientViaServiceAccount(credentials, [
-        sheets.SheetsApi.spreadsheetsScope,
-        drive.DriveApi.driveReadonlyScope,
-      ]);
-      return client;
-    } catch (e) {
-      return null;
-    }
-  }
-
   static Future<sheets.SheetsApi?> getSheetsApi() async {
     SharedPreferences prefs = await SharedPreferences.getInstance();
     bool isOwner = prefs.getBool('isOwner') ?? true;
 
-    if (!isOwner) {
-      final client = await _getServiceAccountClient();
-      if (client != null) {
-        return sheets.SheetsApi(client);
-      }
-      return null;
-    }
+    if (!isOwner) return null;
 
     // Try to get current user, or attempt a silent sign-in if returning to the app
     GoogleSignInAccount? account = _googleSignIn.currentUser;
@@ -82,13 +64,7 @@ class GoogleAuthService {
     SharedPreferences prefs = await SharedPreferences.getInstance();
     bool isOwner = prefs.getBool('isOwner') ?? true;
 
-    if (!isOwner) {
-      final client = await _getServiceAccountClient();
-      if (client != null) {
-        return drive.DriveApi(client);
-      }
-      return null;
-    }
+    if (!isOwner) return null;
 
     // Try to get current user, or attempt a silent sign-in if returning to the app
     GoogleSignInAccount? account = _googleSignIn.currentUser;
@@ -105,5 +81,29 @@ class GoogleAuthService {
     final authHeaders = await account.authHeaders;
     final client = GoogleAuthClient(authHeaders);
     return drive.DriveApi(client);
+  }
+
+  static Future<String?> getServiceAccountEmail() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final cachedEmail = prefs.getString('service_account_email');
+      if (cachedEmail != null && cachedEmail.isNotEmpty) {
+        return cachedEmail;
+      }
+
+      final response = await http.get(Uri.parse(_serviceAccountEmailUrl));
+      if (response.statusCode != 200) {
+        return null;
+      }
+
+      final decodedBody = jsonDecode(response.body);
+      final serviceAccountEmail = decodedBody['serviceAccountEmail'] as String?;
+      if (serviceAccountEmail != null && serviceAccountEmail.isNotEmpty) {
+        await prefs.setString('service_account_email', serviceAccountEmail);
+      }
+      return serviceAccountEmail;
+    } catch (e) {
+      return null;
+    }
   }
 }
