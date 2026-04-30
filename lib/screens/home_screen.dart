@@ -64,7 +64,10 @@ class HomeScreenState extends State<HomeScreen> {
 
 
   Future<List<List<dynamic>>> _sheetsGet(String range) async {
-    if (isOwner) {
+    final prefs = await SharedPreferences.getInstance();
+    final isUserOwner = prefs.getBool('isOwner') ?? false;
+    
+    if (isUserOwner) {
       final api = await GoogleAuthService.getSheetsApi();
       if (api == null) throw Exception('API Call failed, not logged in.');
       final response = await api.spreadsheets.values.get(widget.spreadsheetId!, range);
@@ -76,7 +79,10 @@ class HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _sheetsUpdate(String range, List<List<dynamic>> values) async {
-    if (isOwner) {
+    final prefs = await SharedPreferences.getInstance();
+    final isUserOwner = prefs.getBool('isOwner') ?? false;
+
+    if (isUserOwner) {
       final api = await GoogleAuthService.getSheetsApi();
       if (api == null) throw Exception('API Call failed, not logged in.');
       await api.spreadsheets.values.update(
@@ -91,7 +97,10 @@ class HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _sheetsBatchUpdate(sheets.BatchUpdateValuesRequest request) async {
-    if (isOwner) {
+    final prefs = await SharedPreferences.getInstance();
+    final isUserOwner = prefs.getBool('isOwner') ?? false;
+
+    if (isUserOwner) {
       final api = await GoogleAuthService.getSheetsApi();
       if (api == null) throw Exception('API Call failed, not logged in.');
       await api.spreadsheets.values.batchUpdate(request, widget.spreadsheetId!);
@@ -171,9 +180,15 @@ class HomeScreenState extends State<HomeScreen> {
       try {
         rows = await _sheetsGet('A:ZZ');
       } catch (e) {
-        _showError('خطأ: لم يتم تسجيل الدخول بصلاحيات كافية.');
-        await _logout();
-        return;
+        if (e.toString().contains('not logged in')) {
+          _showError('خطأ: لم يتم تسجيل الدخول بصلاحيات كافية.');
+          await _logout();
+          return;
+        } else {
+          _showError('تعذر جلب البيانات: $e');
+          setState(() { allOrders = []; isLoading = false; });
+          return;
+        }
       }
       if (rows.isEmpty) {
         setState(() { allOrders = []; isLoading = false; });
