@@ -18,19 +18,17 @@ class _SetupScreenState extends State<SetupScreen> {
 
   Future<void> _signInWithGoogle() async {
     setState(() => _isLoading = true);
-
+    
     final user = await GoogleAuthService.signIn();
-
+    
     if (user != null && mounted) {
       // Save owner status
       SharedPreferences prefs = await SharedPreferences.getInstance();
       await prefs.setBool('isOwner', true);
-
+      
       Navigator.pushReplacement(
         context,
-        MaterialPageRoute(
-          builder: (context) => const HomeScreen(spreadsheetId: null),
-        ),
+        MaterialPageRoute(builder: (context) => const HomeScreen(spreadsheetId: null)),
       );
     } else if (mounted) {
       setState(() => _isLoading = false);
@@ -61,7 +59,7 @@ class _SetupScreenState extends State<SetupScreen> {
 
     if (inviteData != null && mounted) {
       final spreadsheetId = inviteData['spreadsheetId'] as String;
-
+      
       SharedPreferences prefs = await SharedPreferences.getInstance();
       await prefs.setString('spreadsheetId', spreadsheetId);
       await prefs.setString('userRole', inviteData['role']);
@@ -70,18 +68,13 @@ class _SetupScreenState extends State<SetupScreen> {
 
       Navigator.pushReplacement(
         context,
-        MaterialPageRoute(
-          builder: (context) => HomeScreen(spreadsheetId: spreadsheetId),
-        ),
+        MaterialPageRoute(builder: (context) => HomeScreen(spreadsheetId: spreadsheetId)),
       );
     } else if (mounted) {
       setState(() => _isLoading = false);
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text(
-            'رمز الدعوة غير صالح أو منتهي الصلاحية',
-            textAlign: TextAlign.right,
-          ),
+          content: Text('رمز الدعوة غير صالح أو منتهي الصلاحية', textAlign: TextAlign.right),
           backgroundColor: Colors.red,
         ),
       );
@@ -97,7 +90,9 @@ class _SetupScreenState extends State<SetupScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('تسجيل الدخول')),
+      appBar: AppBar(
+        title: const Text('تسجيل الدخول'),
+      ),
       body: Center(
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(24.0),
@@ -107,7 +102,7 @@ class _SetupScreenState extends State<SetupScreen> {
             children: [
               const BrandLogo(size: 180, showWordmark: true),
               const SizedBox(height: 40),
-
+              
               // Staff Login Area
               Container(
                 padding: const EdgeInsets.all(20),
@@ -120,10 +115,7 @@ class _SetupScreenState extends State<SetupScreen> {
                   children: [
                     const Text(
                       'تسجيل دخول الموظفين',
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                      ),
+                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                     ),
                     const SizedBox(height: 16),
                     TextField(
@@ -156,28 +148,22 @@ class _SetupScreenState extends State<SetupScreen> {
                             ? const SizedBox(
                                 height: 24,
                                 width: 24,
-                                child: CircularProgressIndicator(
-                                  color: Colors.white,
-                                  strokeWidth: 3,
-                                ),
+                                child: CircularProgressIndicator(color: Colors.white, strokeWidth: 3),
                               )
                             : const Text(
                                 'دخول باستخدام الرمز',
-                                style: TextStyle(
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.bold,
-                                ),
+                                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                               ),
                       ),
                     ),
                   ],
                 ),
               ),
-
+              
               const SizedBox(height: 40),
               const Divider(),
               const SizedBox(height: 24),
-
+              
               // Owner Login Area
               const Text(
                 'هل أنت صاحب العمل؟',

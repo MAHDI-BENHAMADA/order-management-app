@@ -1,4 +1,4 @@
-name: order_app
+name: Livrini
 description: "A new Flutter project."
 publish_to: 'none' 
 
@@ -39,7 +39,6 @@ flutter:
 
   assets:
     - communes.json
-    - assets/service_account.json
     - assets/branding/logo.png
     - assets/branding/splash.png
 
@@ -53,9 +52,9 @@ flutter_launcher_icons:
 
 flutter_native_splash:
   color: '#FFFFFF'
-  image: assets/branding/splash.png
+  image: assets/branding/logo.png
   android_12:
     color: '#FFFFFF'
-    image: assets/branding/splash.png
+    image: assets/branding/logo.png
 
 
