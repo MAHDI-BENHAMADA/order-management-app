@@ -49,6 +49,7 @@ class HomeScreenState extends State<HomeScreen> {
   bool isLoading = true;
   String? filterStatus; // null = show all
   String _searchQuery = '';
+  String _sortMode = 'row'; // 'row' or 'modified'
   ShippingProvider _selectedProvider = ShippingProvider.e48hr;
   String _defaultPrice = '';
   String _defaultProduct = '';
@@ -259,6 +260,7 @@ class HomeScreenState extends State<HomeScreen> {
       await _ensureColumnExists('status', 'Statut');
       await _ensureColumnExists('tracking', 'Tracking');
       await _ensureColumnExists('confirmedBy', 'مؤكد من');
+      await _ensureColumnExists('updatedAt', 'آخر تعديل');
 
       setState(() { _fieldToColumn = newFieldToColumn; });
       
@@ -887,7 +889,19 @@ class HomeScreenState extends State<HomeScreen> {
       });
     }
 
-    return filtered.toList(growable: false);
+    List<AppOrder> result = filtered.toList();
+    if (_sortMode == 'modified') {
+      result.sort((a, b) {
+        if (a.updatedAt == null && b.updatedAt == null) return b.row.compareTo(a.row);
+        if (a.updatedAt == null) return 1;
+        if (b.updatedAt == null) return -1;
+        return b.updatedAt!.compareTo(a.updatedAt!);
+      });
+    } else {
+      result.sort((a, b) => b.row.compareTo(a.row));
+    }
+
+    return result;
   }
 
   Map<String, int> _buildStatusCounts() {
@@ -934,8 +948,10 @@ class HomeScreenState extends State<HomeScreen> {
     }
 
     final oldStatus = order.status;
+    final nowStr = DateTime.now().toIso8601String();
     setState(() {
       order.status = newStatus;
+      order.updatedAt = DateTime.now();
     });
 
     if (newStatus == 'uploaded') {
@@ -954,28 +970,32 @@ class HomeScreenState extends State<HomeScreen> {
       if (statusCol == null) throw Exception('Status column not found in mapping');
       
       final range = '$statusCol${order.row}';
+      final updatedAtCol = _fieldToColumn['updatedAt'];
+      final List<sheets.ValueRange> data = [
+        sheets.ValueRange(range: range, values: [[newStatus]]),
+      ];
       
+      if (updatedAtCol != null) {
+        data.add(sheets.ValueRange(range: '$updatedAtCol${order.row}', values: [[nowStr]]));
+      }
+
       if ((newStatus == 'confirm' || newStatus == 'مؤكد') && !isOwner) {
         final prefs = await SharedPreferences.getInstance();
         final staffName = prefs.getString('staffName') ?? '';
         if (staffName.isNotEmpty) {
           final confirmedByCol = _fieldToColumn['confirmedBy'];
           if (confirmedByCol != null) {
-            final batchUpdate = sheets.BatchUpdateValuesRequest(
-              valueInputOption: 'USER_ENTERED',
-              data: [
-                sheets.ValueRange(range: range, values: [[newStatus]]),
-                sheets.ValueRange(range: '$confirmedByCol${order.row}', values: [[staffName]]),
-              ]
-            );
-            await _sheetsBatchUpdate(batchUpdate);
+            data.add(sheets.ValueRange(range: '$confirmedByCol${order.row}', values: [[staffName]]));
             order.confirmedBy = staffName;
-            return;
           }
         }
       }
 
-      await _sheetsUpdate(range, [[newStatus]]);
+      final batchUpdate = sheets.BatchUpdateValuesRequest(
+        valueInputOption: 'USER_ENTERED',
+        data: data,
+      );
+      await _sheetsBatchUpdate(batchUpdate);
     } catch (e) {
       // Revert if API fails
       setState(() {
@@ -1259,6 +1279,9 @@ class HomeScreenState extends State<HomeScreen> {
       if (_fieldToColumn.containsKey('address')) addRange(_fieldToColumn['address'], address);
       if (_fieldToColumn.containsKey('product')) addRange(_fieldToColumn['product'], product);
       if (_fieldToColumn.containsKey('price'))   addRange(_fieldToColumn['price'], price);
+      
+      final nowStr = DateTime.now().toIso8601String();
+      if (_fieldToColumn.containsKey('updatedAt')) addRange(_fieldToColumn['updatedAt'], nowStr);
 
       if (ranges.isNotEmpty) {
         final batchUpdate = sheets.BatchUpdateValuesRequest(
@@ -1276,6 +1299,7 @@ class HomeScreenState extends State<HomeScreen> {
         order.address = address;
         order.product = product;
         order.price = price;
+        order.updatedAt = DateTime.now();
       });
 
       if (mounted && showSuccessMessage) {
@@ -2524,9 +2548,11 @@ class HomeScreenState extends State<HomeScreen> {
   ) async {
     final oldStatus = order.status;
     final oldTracking = order.trackingNumber;
+    final nowStr = DateTime.now().toIso8601String();
     setState(() {
       order.status = newStatus;
       order.trackingNumber = newTrackingNumber;
+      order.updatedAt = DateTime.now();
     });
 
     try {
@@ -2534,12 +2560,18 @@ class HomeScreenState extends State<HomeScreen> {
       final trackingCol = _fieldToColumn['tracking'];
       if (statusCol == null || trackingCol == null) throw Exception('Status or Tracking column not found in mapping');
 
+      final updatedAtCol = _fieldToColumn['updatedAt'];
+      final List<sheets.ValueRange> data = [
+        sheets.ValueRange(range: '$statusCol${order.row}',   values: [[newStatus]]),
+        sheets.ValueRange(range: '$trackingCol${order.row}', values: [[newTrackingNumber]]),
+      ];
+      if (updatedAtCol != null) {
+        data.add(sheets.ValueRange(range: '$updatedAtCol${order.row}', values: [[nowStr]]));
+      }
+
       final batchUpdate = sheets.BatchUpdateValuesRequest(
         valueInputOption: 'USER_ENTERED',
-        data: [
-          sheets.ValueRange(range: '$statusCol${order.row}',   values: [[newStatus]]),
-          sheets.ValueRange(range: '$trackingCol${order.row}', values: [[newTrackingNumber]]),
-        ],
+        data: data,
       );
 
       await _sheetsBatchUpdate(batchUpdate);
@@ -2793,27 +2825,63 @@ class HomeScreenState extends State<HomeScreen> {
               ],
             ),
             const SizedBox(height: 12),
-            TextField(
-              controller: _searchController,
-              textDirection: TextDirection.rtl,
-              decoration: InputDecoration(
-                hintText: 'ابحث بالاسم أو الهاتف أو الولاية أو رقم التتبع',
-                prefixIcon: const Icon(Icons.search),
-                suffixIcon: _searchQuery.isEmpty
-                    ? null
-                    : IconButton(
-                        icon: const Icon(Icons.clear),
-                        tooltip: 'مسح البحث',
-                        onPressed: () => _searchController.clear(),
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _searchController,
+                    textDirection: TextDirection.rtl,
+                    decoration: InputDecoration(
+                      hintText: 'ابحث بالاسم أو الهاتف أو الولاية أو رقم التتبع',
+                      prefixIcon: const Icon(Icons.search),
+                      suffixIcon: _searchQuery.isEmpty
+                          ? null
+                          : IconButton(
+                              icon: const Icon(Icons.clear),
+                              tooltip: 'مسح البحث',
+                              onPressed: () => _searchController.clear(),
+                            ),
+                      isDense: true,
+                      filled: true,
+                      fillColor: const Color(0xFFF7F7F7),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: BorderSide.none,
                       ),
-                isDense: true,
-                filled: true,
-                fillColor: const Color(0xFFF7F7F7),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  borderSide: BorderSide.none,
+                    ),
+                  ),
                 ),
-              ),
+                const SizedBox(width: 8),
+                PopupMenuButton<String>(
+                  tooltip: 'ترتيب حسب',
+                  icon: const Icon(Icons.sort),
+                  onSelected: (val) {
+                    setState(() => _sortMode = val);
+                  },
+                  itemBuilder: (context) => [
+                    PopupMenuItem(
+                      value: 'row',
+                      child: Row(
+                        children: [
+                          Icon(Icons.format_list_numbered, color: _sortMode == 'row' ? const Color(0xFF10B981) : Colors.grey),
+                          const SizedBox(width: 8),
+                          const Text('الأحدث أولاً'),
+                        ],
+                      ),
+                    ),
+                    PopupMenuItem(
+                      value: 'modified',
+                      child: Row(
+                        children: [
+                          Icon(Icons.update, color: _sortMode == 'modified' ? const Color(0xFF10B981) : Colors.grey),
+                          const SizedBox(width: 8),
+                          const Text('آخر تعديل'),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ],
             ),
             const SizedBox(height: 10),
             SizedBox(

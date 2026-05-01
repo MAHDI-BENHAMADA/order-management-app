@@ -14,6 +14,7 @@ class AppOrder {
   int quantity; // Required when stock = 1
   String? trackingNumber;
   String? confirmedBy;
+  DateTime? updatedAt;
   String status; // Mutable for local state changes
 
   AppOrder({
@@ -32,6 +33,7 @@ class AppOrder {
     this.quantity = 1,
     this.trackingNumber,
     this.confirmedBy,
+    this.updatedAt,
     required this.status,
   });
 
@@ -58,6 +60,9 @@ class AppOrder {
           : int.tryParse(json['quantite']?.toString() ?? '') ?? 1,
       trackingNumber: json['trackingNumber']?.toString(),
       confirmedBy: json['confirmedBy']?.toString(),
+      updatedAt: json['updatedAt'] != null && json['updatedAt'].toString().isNotEmpty
+          ? DateTime.tryParse(json['updatedAt'].toString())
+          : null,
       status: json['status'].toString(),
     );
   }
