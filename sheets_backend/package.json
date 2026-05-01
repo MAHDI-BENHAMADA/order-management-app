@@ -1,0 +1,9 @@
+{
+  "name": "sheets-backend",
+  "version": "1.0.0",
+  "description": "Vercel backend for Sheets Proxy",
+  "main": "api/sheetsProxy.js",
+  "dependencies": {
+    "googleapis": "^128.0.0"
+  }
+}
