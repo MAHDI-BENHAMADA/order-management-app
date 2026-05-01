@@ -66,6 +66,14 @@ class ColumnMapperService {
     'time', 'heure', 'وقت', 'hour', 'timestamp',
   ];
 
+  static const _confirmedByKeywords = [
+    'confirmed by', 'confirmer', 'مؤكد من', 'confirmé par', 'confirmed_by',
+  ];
+
+  static const _updatedAtKeywords = [
+    'updated at', 'derniere modification', 'آخر تعديل', 'updated_at', 'modified',
+  ];
+
   // ---------------------------------------------------------------------------
   // Normalization helper
   // ---------------------------------------------------------------------------
@@ -141,6 +149,8 @@ class ColumnMapperService {
       {'key': 'product',   'kw': _productKeywords},
       {'key': 'price',     'kw': _priceKeywords},
       {'key': 'tracking',  'kw': _trackingKeywords},
+      {'key': 'confirmedBy', 'kw': _confirmedByKeywords},
+      {'key': 'updatedAt', 'kw': _updatedAtKeywords},
     ];
 
     final Map<String, String?> result = {};
@@ -201,6 +211,8 @@ class ColumnMapperService {
       'product': '',
       'price': '',
       'trackingNumber': null,
+      'confirmedBy': null,
+      'updatedAt': null,
     };
 
     columnMap.forEach((letter, fieldKey) {
@@ -246,6 +258,12 @@ class ColumnMapperService {
           break;
         case 'tracking':
           result['trackingNumber'] = value.isNotEmpty ? value : null;
+          break;
+        case 'confirmedBy':
+          result['confirmedBy'] = value.isNotEmpty ? value : null;
+          break;
+        case 'updatedAt':
+          result['updatedAt'] = value.isNotEmpty ? value : null;
           break;
       }
     });

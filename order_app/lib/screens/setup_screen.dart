@@ -64,6 +64,8 @@ class _SetupScreenState extends State<SetupScreen> {
       await prefs.setString('spreadsheetId', spreadsheetId);
       await prefs.setString('userRole', inviteData['role']);
       await prefs.setString('workspaceName', inviteData['workspaceName']);
+      await prefs.setString('staffName', inviteData['name'] ?? 'بدون اسم');
+      await prefs.setString('inviteCode', code);
       await prefs.setBool('isOwner', false);
 
       Navigator.pushReplacement(
