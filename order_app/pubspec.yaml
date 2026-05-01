@@ -2,7 +2,7 @@ name: Livrini
 description: "A new Flutter project."
 publish_to: 'none' 
 
-version: 1.0.0+1
+version: 1.1.0+2
 
 environment:
   sdk: ^3.11.4
@@ -24,6 +24,7 @@ dependencies:
   googleapis_auth: ^2.3.0
   firebase_core: ^4.7.0
   cloud_firestore: ^6.3.0
+  package_info_plus: ^10.1.0
 
 dev_dependencies:
   flutter_test:

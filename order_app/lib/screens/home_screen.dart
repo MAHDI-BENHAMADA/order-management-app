@@ -16,6 +16,8 @@ import 'staff_management_screen.dart';
 import 'setup_screen.dart';
 import '../services/column_mapper_service.dart';
 import '../services/staff_sheets_service.dart';
+import '../services/update_service.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 class _ShippingReadiness {
   final Map<String, String> normalizedValues;
@@ -128,6 +130,40 @@ class HomeScreenState extends State<HomeScreen> {
     });
     _loadLocationData();
     fetchData();
+    _checkForUpdates();
+  }
+
+  Future<void> _checkForUpdates() async {
+    final newVersion = await UpdateService.checkForUpdate();
+    if (newVersion != null && mounted) {
+      showDialog(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('تحديث جديد متاح', textAlign: TextAlign.right),
+          content: Text(
+            'يتوفر إصدار جديد ($newVersion) من التطبيق. يرجى التحديث للحصول على أحدث الميزات والإصلاحات.',
+            textAlign: TextAlign.right,
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('لاحقاً', style: TextStyle(color: Colors.grey)),
+            ),
+            ElevatedButton(
+              onPressed: () async {
+                Navigator.pop(context);
+                final url = Uri.parse('https://livrini.vercel.app');
+                if (await canLaunchUrl(url)) {
+                  await launchUrl(url, mode: LaunchMode.externalApplication);
+                }
+              },
+              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF10B981)),
+              child: const Text('تحديث الآن', style: TextStyle(color: Colors.white)),
+            ),
+          ],
+        ),
+      );
+    }
   }
 
   Future<void> _loadLocationData() async {
