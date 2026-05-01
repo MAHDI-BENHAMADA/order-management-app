@@ -3,9 +3,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../services/invite_service.dart';
 
+import '../models/order.dart';
+
 class StaffManagementScreen extends StatefulWidget {
   final String currentSpreadsheetId;
-  const StaffManagementScreen({super.key, required this.currentSpreadsheetId});
+  final List<AppOrder>? allOrders;
+  const StaffManagementScreen({super.key, required this.currentSpreadsheetId, this.allOrders});
 
   @override
   State<StaffManagementScreen> createState() => _StaffManagementScreenState();
@@ -16,6 +19,7 @@ class _StaffManagementScreenState extends State<StaffManagementScreen> {
   final _phoneController = TextEditingController();
   String _selectedRole = 'مؤكد طلبات (Confirmer)';
   bool _isGenerating = false;
+  String _timeFilter = 'all'; // all, week, month
 
   @override
   void dispose() {
@@ -199,9 +203,25 @@ class _StaffManagementScreenState extends State<StaffManagementScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text(
-                    'الدعوات والموظفين النشطين',
-                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text(
+                        'الدعوات والموظفين النشطين',
+                        style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                      ),
+                      DropdownButton<String>(
+                        value: _timeFilter,
+                        items: const [
+                          DropdownMenuItem(value: 'all', child: Text('كل الوقت')),
+                          DropdownMenuItem(value: 'week', child: Text('آخر أسبوع')),
+                          DropdownMenuItem(value: 'month', child: Text('آخر شهر')),
+                        ],
+                        onChanged: (val) {
+                          if (val != null) setState(() => _timeFilter = val);
+                        },
+                      ),
+                    ],
                   ),
                   const SizedBox(height: 24),
                   StreamBuilder<QuerySnapshot>(
@@ -236,6 +256,39 @@ class _StaffManagementScreenState extends State<StaffManagementScreen> {
                           final data = docs[index].data() as Map<String, dynamic>;
                           final code = docs[index].id;
                           final isActive = data['isActive'] ?? false;
+                          final staffName = data['name'] ?? 'بدون اسم';
+                          
+                          int confirmedCount = 0;
+                          if (widget.allOrders != null) {
+                            final now = DateTime.now();
+                            for (var o in widget.allOrders!) {
+                              if ((o.status == 'confirm' || o.status == 'مؤكد') && o.confirmedBy == staffName) {
+                                // Apply time filter
+                                bool include = true;
+                                if (_timeFilter != 'all' && o.date.isNotEmpty) {
+                                  try {
+                                    // Parse standard dates dd/MM/yyyy or yyyy-MM-dd
+                                    DateTime? orderDate;
+                                    if (o.date.contains('/')) {
+                                      final parts = o.date.split('/');
+                                      if (parts.length >= 3) {
+                                        orderDate = DateTime(int.parse(parts[2]), int.parse(parts[1]), int.parse(parts[0]));
+                                      }
+                                    } else if (o.date.contains('-')) {
+                                      orderDate = DateTime.parse(o.date);
+                                    }
+                                    
+                                    if (orderDate != null) {
+                                      final diff = now.difference(orderDate).inDays;
+                                      if (_timeFilter == 'week' && diff > 7) include = false;
+                                      if (_timeFilter == 'month' && diff > 30) include = false;
+                                    }
+                                  } catch (_) {}
+                                }
+                                if (include) confirmedCount++;
+                              }
+                            }
+                          }
                           
                           return Card(
                             elevation: 2,
@@ -246,7 +299,28 @@ class _StaffManagementScreenState extends State<StaffManagementScreen> {
                                 backgroundColor: isActive ? const Color(0xFF10B981).withValues(alpha: 0.2) : Colors.red.shade100,
                                 child: Icon(Icons.person, color: isActive ? const Color(0xFF10B981) : Colors.red),
                               ),
-                              title: Text(data['name'] ?? 'بدون اسم', style: const TextStyle(fontWeight: FontWeight.bold)),
+                              title: Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                children: [
+                                  Text(staffName, style: const TextStyle(fontWeight: FontWeight.bold)),
+                                  if (data['role'] != 'مشرف (Admin)')
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                      decoration: BoxDecoration(
+                                        color: const Color(0xFF10B981).withValues(alpha: 0.1),
+                                        borderRadius: BorderRadius.circular(8),
+                                      ),
+                                      child: Text(
+                                        'مؤكد: $confirmedCount',
+                                        style: const TextStyle(
+                                          color: Color(0xFF10B981),
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 12,
+                                        ),
+                                      ),
+                                    ),
+                                ],
+                              ),
                               subtitle: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [

@@ -258,8 +258,30 @@ class HomeScreenState extends State<HomeScreen> {
 
       await _ensureColumnExists('status', 'Statut');
       await _ensureColumnExists('tracking', 'Tracking');
+      await _ensureColumnExists('confirmedBy', 'مؤكد من');
 
       setState(() { _fieldToColumn = newFieldToColumn; });
+      
+      // --- Step 1.5: Look for App Metadata (Product Name/Price) ---
+      final prefs = await SharedPreferences.getInstance();
+      int prodNameColIdx = headerRow.indexOf('__PRODUCT_NAME__');
+      int prodPriceColIdx = headerRow.indexOf('__PRODUCT_PRICE__');
+
+      if (prodNameColIdx != -1 && rows.length > 1) {
+        final val = rows[1][prodNameColIdx].toString().trim();
+        if (val.isNotEmpty) {
+          _defaultProduct = val;
+          await prefs.setString('default_product_${widget.spreadsheetId}', val);
+        }
+      }
+      if (prodPriceColIdx != -1 && rows.length > 1) {
+        final val = rows[1][prodPriceColIdx].toString().trim();
+        if (val.isNotEmpty) {
+          _defaultPrice = val;
+          await prefs.setString('default_price_${widget.spreadsheetId}', val);
+        }
+      }
+
 
       // --- Step 2: Parse each data row using the mapping ---
       final List<dynamic> parsedData = [];
@@ -290,6 +312,16 @@ class HomeScreenState extends State<HomeScreen> {
       setState(() {
         allOrders = processedOrders;
       });
+
+      // --- Step 3: Auto-prompt if metadata is missing ---
+      if (_defaultProduct.isEmpty && _defaultPrice.isEmpty && isOwner) {
+        // We use a small delay to ensure the UI has settled
+        Future.delayed(const Duration(milliseconds: 500), () {
+          if (mounted && _defaultProduct.isEmpty && _defaultPrice.isEmpty) {
+            _showProductSettingsDialog(widget.spreadsheetId!, isInitialSetup: true);
+          }
+        });
+      }
     } catch (e) {
       _showError('تعذر جلب البيانات: $e');
     } finally {
@@ -578,8 +610,7 @@ class HomeScreenState extends State<HomeScreen> {
           print('Could not auto-share sheet: $e');
         }
 
-        // Prompt for product settings right after choosing the sheet
-        await _showProductSettingsDialog(selectedFile.id!, isInitialSetup: true);
+        // We no longer prompt here; fetchData will handle it if metadata is missing.
 
         if (!mounted) return;
         Navigator.pushReplacement(
@@ -728,6 +759,11 @@ class HomeScreenState extends State<HomeScreen> {
                           });
                         }
                         if (dialogContext.mounted) Navigator.pop(dialogContext);
+
+                        // Also save to the Google Sheet for persistence across users/devices
+                        if (isOwner) {
+                          _saveMetadataToSheet(product, price);
+                        }
                       },
                       style: ElevatedButton.styleFrom(
                         backgroundColor: const Color(0xFF10B981),
@@ -756,6 +792,45 @@ class HomeScreenState extends State<HomeScreen> {
         ),
       ),
     );
+  }
+
+  /// Saves product metadata to the Google Sheet in dedicated hidden columns.
+  Future<void> _saveMetadataToSheet(String product, String price) async {
+    try {
+      // Refresh current headers
+      final List<List<dynamic>> rows = await _sheetsGet('1:1');
+      if (rows.isEmpty) return;
+      final headerRow = rows[0].map((h) => h.toString()).toList();
+
+      int prodNameColIdx = headerRow.indexOf('__PRODUCT_NAME__');
+      int prodPriceColIdx = headerRow.indexOf('__PRODUCT_PRICE__');
+
+      String nameColLetter;
+      if (prodNameColIdx == -1) {
+        nameColLetter = _colLetter(headerRow.length);
+        await _sheetsUpdate('${nameColLetter}1', [['__PRODUCT_NAME__']]);
+        // Update local headerRow representation to prevent overlap if price is also new
+        headerRow.add('__PRODUCT_NAME__');
+      } else {
+        nameColLetter = _colLetter(prodNameColIdx);
+      }
+
+      String priceColLetter;
+      if (prodPriceColIdx == -1) {
+        priceColLetter = _colLetter(headerRow.length);
+        await _sheetsUpdate('${priceColLetter}1', [['__PRODUCT_PRICE__']]);
+      } else {
+        priceColLetter = _colLetter(prodPriceColIdx);
+      }
+
+      // Write values to the second row (first data row)
+      await _sheetsUpdate('${nameColLetter}2', [[product]]);
+      await _sheetsUpdate('${priceColLetter}2', [[price]]);
+      
+      print('✅ Metadata saved to sheet: $product, $price');
+    } catch (e) {
+      print('❌ Failed to save metadata to sheet: $e');
+    }
   }
 
   void _showError(String message) {
@@ -835,6 +910,29 @@ class HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _updateOrderStatus(AppOrder order, String newStatus) async {
+    if (newStatus == 'confirm' || newStatus == 'مؤكد') {
+      final requiredFields = [
+        {'value': order.name, 'name': 'الاسم'},
+        {'value': order.phone, 'name': 'الهاتف'},
+        {'value': order.wilaya, 'name': 'الولاية'},
+        {'value': order.product, 'name': 'المنتج'},
+        {'value': order.price, 'name': 'السعر'},
+      ];
+      
+      final emptyFields = requiredFields.where((f) => f['value']!.trim().isEmpty).map((f) => f['name']!).toList();
+      
+      if (emptyFields.isNotEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('لا يمكن التأكيد. الحقول التالية فارغة: ${emptyFields.join("، ")}', textAlign: TextAlign.right),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+        return;
+      }
+    }
+
     final oldStatus = order.status;
     setState(() {
       order.status = newStatus;
@@ -856,6 +954,27 @@ class HomeScreenState extends State<HomeScreen> {
       if (statusCol == null) throw Exception('Status column not found in mapping');
       
       final range = '$statusCol${order.row}';
+      
+      if ((newStatus == 'confirm' || newStatus == 'مؤكد') && !isOwner) {
+        final prefs = await SharedPreferences.getInstance();
+        final staffName = prefs.getString('staffName') ?? '';
+        if (staffName.isNotEmpty) {
+          final confirmedByCol = _fieldToColumn['confirmedBy'];
+          if (confirmedByCol != null) {
+            final batchUpdate = sheets.BatchUpdateValuesRequest(
+              valueInputOption: 'USER_ENTERED',
+              data: [
+                sheets.ValueRange(range: range, values: [[newStatus]]),
+                sheets.ValueRange(range: '$confirmedByCol${order.row}', values: [[staffName]]),
+              ]
+            );
+            await _sheetsBatchUpdate(batchUpdate);
+            order.confirmedBy = staffName;
+            return;
+          }
+        }
+      }
+
       await _sheetsUpdate(range, [[newStatus]]);
     } catch (e) {
       // Revert if API fails
@@ -2504,6 +2623,7 @@ class HomeScreenState extends State<HomeScreen> {
                   MaterialPageRoute(
                     builder: (context) => StaffManagementScreen(
                       currentSpreadsheetId: widget.spreadsheetId!,
+                      allOrders: allOrders,
                     ),
                   ),
                 );
