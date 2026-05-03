@@ -184,9 +184,10 @@ class HomeScreenState extends State<HomeScreen> {
       
       isOwner = prefs.getBool('isOwner') ?? false;
 
-      final ecotrackToken = prefs.getString('ecotrack_token');
+      final ecotrackToken = prefs.getString('provider_token_ecotrack') ?? prefs.getString('ecotrack_token');
       if (ecotrackToken != null && ecotrackToken.isNotEmpty) {
         EcoTrackService.setApiToken(ecotrackToken);
+        await EcoTrackService.prefetchFees();
       }
 
       await AlgeriaLocationService.ensureLoaded();
@@ -346,6 +347,66 @@ class HomeScreenState extends State<HomeScreen> {
       await _applyStopDeskSelections(processedOrders);
       await _applyStockSelections(processedOrders);
       await _applyQuantitySelections(processedOrders);
+
+      // --- Step: Auto-fill empty default products and calculate shipping fees ---
+      if (_defaultProduct.isNotEmpty || _defaultPrice.isNotEmpty) {
+        final parsedBasePrice = int.tryParse(_defaultPrice) ?? 0;
+        final valueRanges = <sheets.ValueRange>[];
+        final productColLetter = newFieldToColumn['product'];
+        final priceColLetter = newFieldToColumn['price'];
+        
+        bool hasChanges = false;
+
+        for (final order in processedOrders) {
+          bool orderNeedsUpdate = false;
+          
+          if (order.product.trim().isEmpty && _defaultProduct.isNotEmpty) {
+            order.product = _defaultProduct;
+            orderNeedsUpdate = true;
+          }
+          
+          if (order.price.trim().isEmpty && _defaultPrice.isNotEmpty) {
+            final wilayaCode = AlgeriaLocationService.getWilayaId(order.wilaya) ?? 16;
+            int shippingFee = 0;
+            try {
+              shippingFee = await EcoTrackService.getShippingFee(wilayaCode);
+            } catch (e) {
+              print('Warning: Could not get shipping fee for auto-fill (Token not set?)');
+            }
+            final totalPrice = parsedBasePrice + shippingFee;
+            order.price = totalPrice.toString();
+            orderNeedsUpdate = true;
+          }
+          
+          if (orderNeedsUpdate) {
+            hasChanges = true;
+            if (productColLetter != null && order.product == _defaultProduct) {
+              valueRanges.add(sheets.ValueRange(
+                range: '$productColLetter${order.row}:$productColLetter${order.row}',
+                values: [[order.product]],
+              ));
+            }
+            if (priceColLetter != null && order.price.isNotEmpty) {
+              valueRanges.add(sheets.ValueRange(
+                range: '$priceColLetter${order.row}:$priceColLetter${order.row}',
+                values: [[order.price]],
+              ));
+            }
+          }
+        }
+        
+        if (hasChanges && valueRanges.isNotEmpty) {
+          try {
+            await _sheetsBatchUpdate(sheets.BatchUpdateValuesRequest(
+              data: valueRanges,
+              valueInputOption: 'USER_ENTERED',
+            ));
+            print('✅ Auto-filled empty orders in Google Sheets');
+          } catch (e) {
+            print('Error auto-filling empty orders: $e');
+          }
+        }
+      }
 
       setState(() {
         allOrders = processedOrders;
@@ -802,6 +863,9 @@ class HomeScreenState extends State<HomeScreen> {
                         if (isOwner) {
                           _saveMetadataToSheet(product, price);
                         }
+                        
+                        // Re-fetch to apply the new defaults to any empty rows
+                        fetchData();
                       },
                       style: ElevatedButton.styleFrom(
                         backgroundColor: const Color(0xFF10B981),
@@ -957,6 +1021,14 @@ class HomeScreenState extends State<HomeScreen> {
       n = (n ~/ 26) - 1;
     } while (n >= 0);
     return result;
+  }
+
+  static int _colIndex(String letter) {
+    int index = 0;
+    for (int i = 0; i < letter.length; i++) {
+      index = index * 26 + (letter.codeUnitAt(i) - 64);
+    }
+    return index - 1;
   }
 
   Future<void> _updateOrderStatus(AppOrder order, String newStatus) async {
@@ -2728,12 +2800,13 @@ class HomeScreenState extends State<HomeScreen> {
               color: const Color(0xFF10B981),
               tooltip: 'الإحصائيات',
             ),
-          IconButton(
-            icon: const Icon(Icons.table_chart),
-            onPressed: _showSheetSelector,
-            color: const Color(0xFF10B981),
-            tooltip: 'تغيير الجدول',
-          ),
+          if (isOwner)
+            IconButton(
+              icon: const Icon(Icons.table_chart),
+              onPressed: _showSheetSelector,
+              color: const Color(0xFF10B981),
+              tooltip: 'تغيير الجدول',
+            ),
           IconButton(
             icon: const Icon(Icons.logout),
             onPressed: _logoutInProgress ? null : _logout,
@@ -2758,7 +2831,14 @@ class HomeScreenState extends State<HomeScreen> {
                   child: RefreshIndicator(
                     onRefresh: fetchData,
                     color: const Color(0xFF10B981),
-                    child: _buildOrderList(filteredOrders),
+                    child: LayoutBuilder(
+                      builder: (context, constraints) {
+                        if (constraints.maxWidth > 800) {
+                          return _buildDesktopTable(filteredOrders);
+                        }
+                        return _buildOrderList(filteredOrders);
+                      },
+                    ),
                   ),
                 ),
               ],
@@ -3069,6 +3149,131 @@ class HomeScreenState extends State<HomeScreen> {
             ),
           ),
       ],
+    );
+  }
+
+  Widget _buildDesktopTable(List<AppOrder> orders) {
+    if (orders.isEmpty) {
+      return const Center(
+        child: Text(
+          'لا توجد طلبات مطابقة',
+          style: TextStyle(color: Colors.grey, fontSize: 18),
+        ),
+      );
+    }
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        return Container(
+          margin: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.grey[200]!),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              // Table Header
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                decoration: BoxDecoration(
+                  color: Colors.grey[100],
+                  borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
+                  border: Border(bottom: BorderSide(color: Colors.grey[200]!)),
+                ),
+                child: const Row(
+                  children: [
+                    SizedBox(width: 60, child: Text('الرقم', style: TextStyle(fontWeight: FontWeight.bold))),
+                    Expanded(flex: 2, child: Text('العميل', style: TextStyle(fontWeight: FontWeight.bold))),
+                    Expanded(flex: 2, child: Text('الموقع', style: TextStyle(fontWeight: FontWeight.bold))),
+                    Expanded(flex: 2, child: Text('المنتج والسعر', style: TextStyle(fontWeight: FontWeight.bold))),
+                    SizedBox(width: 160, child: Text('الحالة', style: TextStyle(fontWeight: FontWeight.bold))),
+                    SizedBox(width: 120, child: Text('الإجراءات', style: TextStyle(fontWeight: FontWeight.bold), textAlign: TextAlign.center)),
+                  ],
+                ),
+              ),
+              // Table Body (Lazy loaded for 60fps performance)
+              Expanded(
+                child: ListView.separated(
+                  itemCount: orders.length,
+                  separatorBuilder: (context, index) => const Divider(height: 1),
+                  itemBuilder: (context, index) {
+                    final order = orders[index];
+                    return Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                      child: Row(
+                        children: [
+                          SizedBox(width: 60, child: Text('#${order.row}', style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.grey))),
+                          Expanded(
+                            flex: 2,
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Text(order.name.isNotEmpty ? order.name : 'بدون اسم', style: const TextStyle(fontWeight: FontWeight.bold)),
+                                Text(order.phone.isNotEmpty ? order.phone : 'بدون هاتف', style: TextStyle(color: Colors.grey[600], fontSize: 12), textDirection: TextDirection.ltr),
+                              ],
+                            ),
+                          ),
+                          Expanded(
+                            flex: 2,
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Text(order.wilaya.isNotEmpty ? order.wilaya : '-', style: const TextStyle(fontWeight: FontWeight.bold)),
+                                Text(order.commune.isNotEmpty ? order.commune : '-', style: TextStyle(color: Colors.grey[600], fontSize: 12)),
+                              ],
+                            ),
+                          ),
+                          Expanded(
+                            flex: 2,
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Text(order.product.isNotEmpty ? order.product : '-', style: const TextStyle(fontWeight: FontWeight.bold)),
+                                Text('${order.price} د.ج', style: const TextStyle(color: Color(0xFF10B981), fontWeight: FontWeight.bold, fontSize: 12)),
+                              ],
+                            ),
+                          ),
+                          SizedBox(
+                            width: 160,
+                            child: StatusSelector(
+                              currentStatus: order.status,
+                              onSelected: (newStatus) => _updateOrderStatus(order, newStatus),
+                            ),
+                          ),
+                          SizedBox(
+                            width: 120,
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                IconButton(
+                                  icon: const Icon(Icons.edit_outlined, color: Colors.blueGrey),
+                                  onPressed: () => _showEditDialog(order),
+                                  tooltip: 'تعديل',
+                                ),
+                                if (order.status == 'confirm')
+                                  IconButton(
+                                    icon: const Icon(Icons.local_shipping, color: Color(0xFF0066CC)),
+                                    onPressed: _shippingRowsInProgress.contains(order.row) ? null : () => _shipWithSelectedProvider(order),
+                                    tooltip: 'شحن',
+                                  ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 }

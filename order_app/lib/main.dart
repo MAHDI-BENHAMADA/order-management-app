@@ -72,7 +72,7 @@ class _StartupGateState extends State<_StartupGate> {
         options: DefaultFirebaseOptions.currentPlatform,
       );
     } catch (e) {
-      debugPrint('Firebase init failed or already initialized');
+      debugPrint('Firebase init failed: $e');
     }
 
     try {
