@@ -40,11 +40,11 @@ _StatusOption _statusFor(String status) {
   );
 }
 
-class _StatusSelector extends StatelessWidget {
+class StatusSelector extends StatelessWidget {
   final String currentStatus;
   final ValueChanged<String> onSelected;
 
-  const _StatusSelector({
+  const StatusSelector({
     required this.currentStatus,
     required this.onSelected,
   });
@@ -204,7 +204,7 @@ class OrderCard extends StatelessWidget {
             Row(
               children: [
                 Expanded(
-                  child: _StatusSelector(
+                  child: StatusSelector(
                     currentStatus: order.status,
                     onSelected: onStatusChange,
                   ),

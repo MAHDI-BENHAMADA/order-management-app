@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:googleapis/sheets/v4.dart' as sheets;
 import 'package:googleapis/drive/v3.dart' as drive;
@@ -12,6 +13,7 @@ class GoogleAuthService {
       'https://sheets-backend-bay.vercel.app/api/getServiceAccountEmail';
 
   static final GoogleSignIn _googleSignIn = GoogleSignIn(
+    clientId: kIsWeb ? '909066568788-bffqc393944sd74ivvansckkou1158oc.apps.googleusercontent.com' : null,
     scopes: [
       sheets.SheetsApi.spreadsheetsScope, // Request permission to read/write spreadsheets
       drive.DriveApi.driveScope, // Full drive scope needed to change permissions of files
@@ -22,6 +24,7 @@ class GoogleAuthService {
     try {
       return await _googleSignIn.signIn();
     } catch (error) {
+      print('Google Sign-In Error: $error');
       return null;
     }
   }

@@ -2758,7 +2758,14 @@ class HomeScreenState extends State<HomeScreen> {
                   child: RefreshIndicator(
                     onRefresh: fetchData,
                     color: const Color(0xFF10B981),
-                    child: _buildOrderList(filteredOrders),
+                    child: LayoutBuilder(
+                      builder: (context, constraints) {
+                        if (constraints.maxWidth > 800) {
+                          return _buildDesktopTable(filteredOrders);
+                        }
+                        return _buildOrderList(filteredOrders);
+                      },
+                    ),
                   ),
                 ),
               ],
@@ -3069,6 +3076,131 @@ class HomeScreenState extends State<HomeScreen> {
             ),
           ),
       ],
+    );
+  }
+
+  Widget _buildDesktopTable(List<AppOrder> orders) {
+    if (orders.isEmpty) {
+      return const Center(
+        child: Text(
+          'لا توجد طلبات مطابقة',
+          style: TextStyle(color: Colors.grey, fontSize: 18),
+        ),
+      );
+    }
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        return Container(
+          margin: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.grey[200]!),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              // Table Header
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                decoration: BoxDecoration(
+                  color: Colors.grey[100],
+                  borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
+                  border: Border(bottom: BorderSide(color: Colors.grey[200]!)),
+                ),
+                child: const Row(
+                  children: [
+                    SizedBox(width: 60, child: Text('الرقم', style: TextStyle(fontWeight: FontWeight.bold))),
+                    Expanded(flex: 2, child: Text('العميل', style: TextStyle(fontWeight: FontWeight.bold))),
+                    Expanded(flex: 2, child: Text('الموقع', style: TextStyle(fontWeight: FontWeight.bold))),
+                    Expanded(flex: 2, child: Text('المنتج والسعر', style: TextStyle(fontWeight: FontWeight.bold))),
+                    SizedBox(width: 160, child: Text('الحالة', style: TextStyle(fontWeight: FontWeight.bold))),
+                    SizedBox(width: 120, child: Text('الإجراءات', style: TextStyle(fontWeight: FontWeight.bold), textAlign: TextAlign.center)),
+                  ],
+                ),
+              ),
+              // Table Body (Lazy loaded for 60fps performance)
+              Expanded(
+                child: ListView.separated(
+                  itemCount: orders.length,
+                  separatorBuilder: (context, index) => const Divider(height: 1),
+                  itemBuilder: (context, index) {
+                    final order = orders[index];
+                    return Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                      child: Row(
+                        children: [
+                          SizedBox(width: 60, child: Text('#${order.row}', style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.grey))),
+                          Expanded(
+                            flex: 2,
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Text(order.name.isNotEmpty ? order.name : 'بدون اسم', style: const TextStyle(fontWeight: FontWeight.bold)),
+                                Text(order.phone.isNotEmpty ? order.phone : 'بدون هاتف', style: TextStyle(color: Colors.grey[600], fontSize: 12), textDirection: TextDirection.ltr),
+                              ],
+                            ),
+                          ),
+                          Expanded(
+                            flex: 2,
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Text(order.wilaya.isNotEmpty ? order.wilaya : '-', style: const TextStyle(fontWeight: FontWeight.bold)),
+                                Text(order.commune.isNotEmpty ? order.commune : '-', style: TextStyle(color: Colors.grey[600], fontSize: 12)),
+                              ],
+                            ),
+                          ),
+                          Expanded(
+                            flex: 2,
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Text(order.product.isNotEmpty ? order.product : '-', style: const TextStyle(fontWeight: FontWeight.bold)),
+                                Text('${order.price} د.ج', style: const TextStyle(color: Color(0xFF10B981), fontWeight: FontWeight.bold, fontSize: 12)),
+                              ],
+                            ),
+                          ),
+                          SizedBox(
+                            width: 160,
+                            child: StatusSelector(
+                              currentStatus: order.status,
+                              onSelected: (newStatus) => _updateOrderStatus(order, newStatus),
+                            ),
+                          ),
+                          SizedBox(
+                            width: 120,
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                IconButton(
+                                  icon: const Icon(Icons.edit_outlined, color: Colors.blueGrey),
+                                  onPressed: () => _showEditDialog(order),
+                                  tooltip: 'تعديل',
+                                ),
+                                if (order.status == 'confirm')
+                                  IconButton(
+                                    icon: const Icon(Icons.local_shipping, color: Color(0xFF0066CC)),
+                                    onPressed: _shippingRowsInProgress.contains(order.row) ? null : () => _shipWithSelectedProvider(order),
+                                    tooltip: 'شحن',
+                                  ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 }
