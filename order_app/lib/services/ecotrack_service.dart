@@ -22,6 +22,39 @@ class EcoTrackService {
   /// Get the current base URL
   static String getBaseUrl() => _baseUrl;
 
+  static Map<int, int> _cachedFees = {};
+
+  static Future<void> prefetchFees() async {
+    if (_apiToken == null) return;
+    try {
+      final uri = Uri.parse('$_baseUrl/get/fees');
+      final response = await http.get(
+        uri,
+        headers: {
+          'Authorization': 'Bearer $_apiToken',
+          'Content-Type': 'application/json',
+        },
+      ).timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        final livraison = data['livraison'] as List?;
+        if (livraison != null) {
+          for (var fee in livraison) {
+            final wilayaId = fee['wilaya_id'];
+            final tarif = int.tryParse(fee['tarif'].toString());
+            if (wilayaId != null && tarif != null) {
+              _cachedFees[wilayaId as int] = tarif;
+            }
+          }
+        }
+        print('✅ Prefetched ${_cachedFees.length} EcoTrack shipping fees');
+      }
+    } catch (e) {
+      print('Error prefetching fees: $e');
+    }
+  }
+
   static Future<bool> validateToken() async {
     if (_apiToken == null) {
       throw Exception('EcoTrack API Token not set');
@@ -335,6 +368,10 @@ class EcoTrackService {
   }
 
   static Future<int> getShippingFee(int wilayaCode) async {
+    if (_cachedFees.containsKey(wilayaCode)) {
+      return _cachedFees[wilayaCode]!;
+    }
+
     if (_apiToken == null) {
       throw Exception('EcoTrack API Token not set');
     }
@@ -460,17 +497,12 @@ class EcoTrackService {
         }
       }
 
-      // Get shipping fee for this wilaya
+      // We no longer add the shipping fee here because the app now ensures the sheet holds the total price.
       final shippingFee = await getShippingFee(wilayaCode);
-
-      // Parse order price
-      final orderPrice = parsedPrice;
-
-      // Total montant = order price + shipping fee
-      final totalAmount = orderPrice + shippingFee;
+      final totalAmount = parsedPrice; // Price in sheet is already the total price (Base + Shipping)
 
       print(
-        'Order Price: $orderPrice, Shipping Fee: $shippingFee, Total: $totalAmount',
+        'Order Price (Sheet Total): $totalAmount, (Shipping Fee for info: $shippingFee)',
       );
       print('Final Commune: "$commune" (Wilaya Code: $wilayaCode)');
 

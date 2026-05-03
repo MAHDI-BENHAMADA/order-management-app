@@ -1,5 +1,1 @@
-{
-  "functions": {
-    "source": "functions"
-  }
-}
+{"functions":{"source":"functions"},"flutter":{"platforms":{"android":{"default":{"projectId":"order-management-d9f96","appId":"1:909066568788:android:861236afe68864d61399c1","fileOutput":"android/app/google-services.json"}},"dart":{"lib/firebase_options.dart":{"projectId":"order-management-d9f96","configurations":{"android":"1:909066568788:android:861236afe68864d61399c1","web":"1:909066568788:web:51eaa3beb846a46e1399c1"}}}}}}

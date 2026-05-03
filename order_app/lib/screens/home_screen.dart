@@ -184,9 +184,10 @@ class HomeScreenState extends State<HomeScreen> {
       
       isOwner = prefs.getBool('isOwner') ?? false;
 
-      final ecotrackToken = prefs.getString('ecotrack_token');
+      final ecotrackToken = prefs.getString('provider_token_ecotrack') ?? prefs.getString('ecotrack_token');
       if (ecotrackToken != null && ecotrackToken.isNotEmpty) {
         EcoTrackService.setApiToken(ecotrackToken);
+        await EcoTrackService.prefetchFees();
       }
 
       await AlgeriaLocationService.ensureLoaded();
@@ -346,6 +347,66 @@ class HomeScreenState extends State<HomeScreen> {
       await _applyStopDeskSelections(processedOrders);
       await _applyStockSelections(processedOrders);
       await _applyQuantitySelections(processedOrders);
+
+      // --- Step: Auto-fill empty default products and calculate shipping fees ---
+      if (_defaultProduct.isNotEmpty || _defaultPrice.isNotEmpty) {
+        final parsedBasePrice = int.tryParse(_defaultPrice) ?? 0;
+        final valueRanges = <sheets.ValueRange>[];
+        final productColLetter = newFieldToColumn['product'];
+        final priceColLetter = newFieldToColumn['price'];
+        
+        bool hasChanges = false;
+
+        for (final order in processedOrders) {
+          bool orderNeedsUpdate = false;
+          
+          if (order.product.trim().isEmpty && _defaultProduct.isNotEmpty) {
+            order.product = _defaultProduct;
+            orderNeedsUpdate = true;
+          }
+          
+          if (order.price.trim().isEmpty && _defaultPrice.isNotEmpty) {
+            final wilayaCode = AlgeriaLocationService.getWilayaId(order.wilaya) ?? 16;
+            int shippingFee = 0;
+            try {
+              shippingFee = await EcoTrackService.getShippingFee(wilayaCode);
+            } catch (e) {
+              print('Warning: Could not get shipping fee for auto-fill (Token not set?)');
+            }
+            final totalPrice = parsedBasePrice + shippingFee;
+            order.price = totalPrice.toString();
+            orderNeedsUpdate = true;
+          }
+          
+          if (orderNeedsUpdate) {
+            hasChanges = true;
+            if (productColLetter != null && order.product == _defaultProduct) {
+              valueRanges.add(sheets.ValueRange(
+                range: '$productColLetter${order.row}:$productColLetter${order.row}',
+                values: [[order.product]],
+              ));
+            }
+            if (priceColLetter != null && order.price.isNotEmpty) {
+              valueRanges.add(sheets.ValueRange(
+                range: '$priceColLetter${order.row}:$priceColLetter${order.row}',
+                values: [[order.price]],
+              ));
+            }
+          }
+        }
+        
+        if (hasChanges && valueRanges.isNotEmpty) {
+          try {
+            await _sheetsBatchUpdate(sheets.BatchUpdateValuesRequest(
+              data: valueRanges,
+              valueInputOption: 'USER_ENTERED',
+            ));
+            print('✅ Auto-filled empty orders in Google Sheets');
+          } catch (e) {
+            print('Error auto-filling empty orders: $e');
+          }
+        }
+      }
 
       setState(() {
         allOrders = processedOrders;
@@ -802,6 +863,9 @@ class HomeScreenState extends State<HomeScreen> {
                         if (isOwner) {
                           _saveMetadataToSheet(product, price);
                         }
+                        
+                        // Re-fetch to apply the new defaults to any empty rows
+                        fetchData();
                       },
                       style: ElevatedButton.styleFrom(
                         backgroundColor: const Color(0xFF10B981),
@@ -957,6 +1021,14 @@ class HomeScreenState extends State<HomeScreen> {
       n = (n ~/ 26) - 1;
     } while (n >= 0);
     return result;
+  }
+
+  static int _colIndex(String letter) {
+    int index = 0;
+    for (int i = 0; i < letter.length; i++) {
+      index = index * 26 + (letter.codeUnitAt(i) - 64);
+    }
+    return index - 1;
   }
 
   Future<void> _updateOrderStatus(AppOrder order, String newStatus) async {
@@ -2728,12 +2800,13 @@ class HomeScreenState extends State<HomeScreen> {
               color: const Color(0xFF10B981),
               tooltip: 'الإحصائيات',
             ),
-          IconButton(
-            icon: const Icon(Icons.table_chart),
-            onPressed: _showSheetSelector,
-            color: const Color(0xFF10B981),
-            tooltip: 'تغيير الجدول',
-          ),
+          if (isOwner)
+            IconButton(
+              icon: const Icon(Icons.table_chart),
+              onPressed: _showSheetSelector,
+              color: const Color(0xFF10B981),
+              tooltip: 'تغيير الجدول',
+            ),
           IconButton(
             icon: const Icon(Icons.logout),
             onPressed: _logoutInProgress ? null : _logout,

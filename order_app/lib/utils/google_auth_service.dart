@@ -31,7 +31,17 @@ class GoogleAuthService {
 
   static Future<void> signOut() async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.clear();
+    
+    // Clear only auth and session-related data, preserving API tokens and user preferences
+    await prefs.remove('spreadsheetId');
+    await prefs.remove('spreadsheet_id');
+    await prefs.remove('spreadsheet_name');
+    await prefs.remove('isOwner');
+    await prefs.remove('userRole');
+    await prefs.remove('workspaceName');
+    await prefs.remove('staffName');
+    await prefs.remove('inviteCode');
+    await prefs.remove('service_account_email');
     try {
       await _googleSignIn.signOut();
     } catch (_) {}
