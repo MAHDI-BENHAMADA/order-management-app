@@ -73,8 +73,19 @@ class HomeScreenState extends State<HomeScreen> {
     if (isUserOwner) {
       final api = await GoogleAuthService.getSheetsApi();
       if (api == null) throw Exception('API Call failed, not logged in.');
-      final response = await api.spreadsheets.values.get(widget.spreadsheetId!, range);
-      return (response.values ?? []).map((e) => e as List<dynamic>).toList();
+      try {
+        final response = await api.spreadsheets.values.get(widget.spreadsheetId!, range);
+        return (response.values ?? []).map((e) => e as List<dynamic>).toList();
+      } catch (e) {
+        if (_isAuthError(e)) {
+          print('🔄 Token expired, refreshing...');
+          final retryApi = await GoogleAuthService.refreshAndGetSheetsApi();
+          if (retryApi == null) throw Exception('Re-auth failed.');
+          final response = await retryApi.spreadsheets.values.get(widget.spreadsheetId!, range);
+          return (response.values ?? []).map((e) => e as List<dynamic>).toList();
+        }
+        rethrow;
+      }
     } else {
       final response = await StaffSheetsService.getValues(widget.spreadsheetId!, range);
       return (response.values ?? []).map((e) => e as List<dynamic>).toList();
@@ -88,12 +99,27 @@ class HomeScreenState extends State<HomeScreen> {
     if (isUserOwner) {
       final api = await GoogleAuthService.getSheetsApi();
       if (api == null) throw Exception('API Call failed, not logged in.');
-      await api.spreadsheets.values.update(
-        sheets.ValueRange(values: values),
-        widget.spreadsheetId!,
-        range,
-        valueInputOption: 'USER_ENTERED',
-      );
+      try {
+        await api.spreadsheets.values.update(
+          sheets.ValueRange(values: values),
+          widget.spreadsheetId!,
+          range,
+          valueInputOption: 'USER_ENTERED',
+        );
+      } catch (e) {
+        if (_isAuthError(e)) {
+          final retryApi = await GoogleAuthService.refreshAndGetSheetsApi();
+          if (retryApi == null) throw Exception('Re-auth failed.');
+          await retryApi.spreadsheets.values.update(
+            sheets.ValueRange(values: values),
+            widget.spreadsheetId!,
+            range,
+            valueInputOption: 'USER_ENTERED',
+          );
+        } else {
+          rethrow;
+        }
+      }
     } else {
       await StaffSheetsService.updateValues(widget.spreadsheetId!, range, sheets.ValueRange(values: values));
     }
@@ -106,10 +132,25 @@ class HomeScreenState extends State<HomeScreen> {
     if (isUserOwner) {
       final api = await GoogleAuthService.getSheetsApi();
       if (api == null) throw Exception('API Call failed, not logged in.');
-      await api.spreadsheets.values.batchUpdate(request, widget.spreadsheetId!);
+      try {
+        await api.spreadsheets.values.batchUpdate(request, widget.spreadsheetId!);
+      } catch (e) {
+        if (_isAuthError(e)) {
+          final retryApi = await GoogleAuthService.refreshAndGetSheetsApi();
+          if (retryApi == null) throw Exception('Re-auth failed.');
+          await retryApi.spreadsheets.values.batchUpdate(request, widget.spreadsheetId!);
+        } else {
+          rethrow;
+        }
+      }
     } else {
       await StaffSheetsService.batchUpdate(widget.spreadsheetId!, request);
     }
+  }
+
+  bool _isAuthError(dynamic e) {
+    final msg = e.toString().toLowerCase();
+    return msg.contains('401') || msg.contains('unauthorized') || msg.contains('invalid credentials');
   }
 
 

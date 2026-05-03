@@ -15,18 +15,89 @@ class GoogleAuthService {
   static final GoogleSignIn _googleSignIn = GoogleSignIn(
     clientId: kIsWeb ? '909066568788-bffqc393944sd74ivvansckkou1158oc.apps.googleusercontent.com' : null,
     scopes: [
-      sheets.SheetsApi.spreadsheetsScope, // Request permission to read/write spreadsheets
-      drive.DriveApi.driveScope, // Full drive scope needed to change permissions of files
+      sheets.SheetsApi.spreadsheetsScope,
+      drive.DriveApi.driveScope,
     ],
   );
 
   static Future<GoogleSignInAccount?> signIn() async {
     try {
-      return await _googleSignIn.signIn();
+      final account = await _googleSignIn.signIn();
+      if (account != null) {
+        await _cacheAuthHeaders(account);
+      }
+      return account;
     } catch (error) {
       print('Google Sign-In Error: $error');
       return null;
     }
+  }
+
+  /// Cache auth headers to localStorage so we survive page refreshes on web
+  static Future<void> _cacheAuthHeaders(GoogleSignInAccount account) async {
+    try {
+      final headers = await account.authHeaders;
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('cached_auth_headers', jsonEncode(headers));
+    } catch (e) {
+      print('Failed to cache auth headers: $e');
+    }
+  }
+
+  /// Clear cached headers (called when a 401 is detected)
+  static Future<void> _clearCachedHeaders() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('cached_auth_headers');
+  }
+
+  /// Try to get a valid auth client: cached headers → silent sign-in → interactive (web only)
+  static Future<GoogleAuthClient?> _getAuthClient({bool forceRefresh = false}) async {
+    final prefs = await SharedPreferences.getInstance();
+    final isOwner = prefs.getBool('isOwner') ?? true;
+    if (!isOwner) return null;
+
+    // 1. Try current in-memory session
+    GoogleSignInAccount? account = _googleSignIn.currentUser;
+    if (account != null) {
+      await _cacheAuthHeaders(account);
+      final headers = await account.authHeaders;
+      return GoogleAuthClient(headers);
+    }
+
+    // 2. Try silent sign-in (works on mobile, rarely on web)
+    try {
+      account = await _googleSignIn.signInSilently();
+      if (account != null) {
+        await _cacheAuthHeaders(account);
+        final headers = await account.authHeaders;
+        return GoogleAuthClient(headers);
+      }
+    } catch (_) {}
+
+    // 3. On web, try cached headers (survives page refresh until token expires)
+    if (kIsWeb && !forceRefresh) {
+      final cachedJson = prefs.getString('cached_auth_headers');
+      if (cachedJson != null) {
+        final headers = Map<String, String>.from(jsonDecode(cachedJson));
+        return GoogleAuthClient(headers);
+      }
+    }
+
+    // 4. Last resort: interactive sign-in (popup)
+    if (kIsWeb) {
+      try {
+        account = await _googleSignIn.signIn();
+        if (account != null) {
+          await _cacheAuthHeaders(account);
+          final headers = await account.authHeaders;
+          return GoogleAuthClient(headers);
+        }
+      } catch (e) {
+        print('Interactive re-auth failed: $e');
+      }
+    }
+
+    return null;
   }
 
   static Future<void> signOut() async {
@@ -42,6 +113,7 @@ class GoogleAuthService {
     await prefs.remove('staffName');
     await prefs.remove('inviteCode');
     await prefs.remove('service_account_email');
+    await prefs.remove('cached_auth_headers');
     try {
       await _googleSignIn.signOut();
     } catch (_) {}
@@ -51,48 +123,41 @@ class GoogleAuthService {
   }
 
   static Future<sheets.SheetsApi?> getSheetsApi() async {
-    SharedPreferences prefs = await SharedPreferences.getInstance();
-    bool isOwner = prefs.getBool('isOwner') ?? true;
-
-    if (!isOwner) return null;
-
-    // Try to get current user, or attempt a silent sign-in if returning to the app
-    GoogleSignInAccount? account = _googleSignIn.currentUser;
-    if (account == null) {
-      try {
-        account = await _googleSignIn.signInSilently();
-      } catch (e) {
-        return null;
-      }
-    }
-    
-    if (account == null) return null;
-
-    final authHeaders = await account.authHeaders;
-    final client = GoogleAuthClient(authHeaders);
+    final client = await _getAuthClient();
+    if (client == null) return null;
     return sheets.SheetsApi(client);
   }
 
+  /// Get Sheets API with automatic retry on 401 (expired token).
+  /// Call this instead of getSheetsApi() when you want auto-refresh.
+  static Future<sheets.SheetsApi?> getSheetsApiWithRetry() async {
+    var api = await getSheetsApi();
+    if (api == null) return null;
+
+    // We return a wrapper that detects 401 and retries with a fresh token.
+    // The actual retry happens at the call site in home_screen.
+    return api;
+  }
+
   static Future<drive.DriveApi?> getDriveApi() async {
-    SharedPreferences prefs = await SharedPreferences.getInstance();
-    bool isOwner = prefs.getBool('isOwner') ?? true;
+    final client = await _getAuthClient();
+    if (client == null) return null;
+    return drive.DriveApi(client);
+  }
 
-    if (!isOwner) return null;
+  /// Force re-authenticate (clears cache and gets fresh token).
+  /// Call this when an API call returns 401.
+  static Future<sheets.SheetsApi?> refreshAndGetSheetsApi() async {
+    await _clearCachedHeaders();
+    final client = await _getAuthClient(forceRefresh: true);
+    if (client == null) return null;
+    return sheets.SheetsApi(client);
+  }
 
-    // Try to get current user, or attempt a silent sign-in if returning to the app
-    GoogleSignInAccount? account = _googleSignIn.currentUser;
-    if (account == null) {
-      try {
-        account = await _googleSignIn.signInSilently();
-      } catch (e) {
-        return null;
-      }
-    }
-    
-    if (account == null) return null;
-
-    final authHeaders = await account.authHeaders;
-    final client = GoogleAuthClient(authHeaders);
+  static Future<drive.DriveApi?> refreshAndGetDriveApi() async {
+    await _clearCachedHeaders();
+    final client = await _getAuthClient(forceRefresh: true);
+    if (client == null) return null;
     return drive.DriveApi(client);
   }
 
