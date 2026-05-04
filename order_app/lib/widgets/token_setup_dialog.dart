@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/shipping_provider.dart';
+import '../services/token_storage_service.dart';
 
 /// Dialog to enter or update API token for a shipping provider
 class TokenSetupDialog extends StatefulWidget {
@@ -48,9 +49,7 @@ class _TokenSetupDialogState extends State<TokenSetupDialog> {
     setState(() => _isLoading = true);
 
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final tokenKey = _getTokenKey(widget.provider);
-      await prefs.setString(tokenKey, token);
+      await TokenStorageService.saveToken(widget.provider.id, token);
 
       if (mounted) {
         Navigator.pop(context);
@@ -153,12 +152,10 @@ class _TokenStatusDialogState extends State<TokenStatusDialog> {
   }
 
   Future<void> _loadTokenStatuses() async {
-    final prefs = await SharedPreferences.getInstance();
     final statuses = <String, bool>{};
 
     for (final provider in _providers) {
-      final tokenKey = _getTokenKey(provider);
-      final token = prefs.getString(tokenKey);
+      final token = await TokenStorageService.getToken(provider.id);
       statuses[provider.id] = token != null && token.trim().isNotEmpty;
     }
 

@@ -4,8 +4,10 @@
 .flutter-plugins-dependencies
 .pub-cache/
 .pub/
-build/
-order_app/build/
+build/*
+!build/web/
+order_app/build/*
+!order_app/build/web/
 order_app/.dart_tool/
 order_app/.flutter-plugins
 order_app/.flutter-plugins-dependencies
