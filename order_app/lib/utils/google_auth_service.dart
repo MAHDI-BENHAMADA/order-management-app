@@ -20,6 +20,9 @@ class GoogleAuthService {
     ],
   );
 
+  /// Stream that fires whenever the signed-in user changes (including FedCM/One Tap auto sign-in)
+  static Stream<GoogleSignInAccount?> get onUserChanged => _googleSignIn.onCurrentUserChanged;
+
   static Future<GoogleSignInAccount?> signIn() async {
     try {
       final account = await _googleSignIn.signIn();
@@ -39,8 +42,17 @@ class GoogleAuthService {
       final headers = await account.authHeaders;
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('cached_auth_headers', jsonEncode(headers));
+      print('✅ Auth headers cached');
     } catch (e) {
       print('Failed to cache auth headers: $e');
+    }
+  }
+
+  /// Called when FedCM/One Tap completes — caches the new headers immediately
+  static Future<void> cacheCurrentUserHeaders() async {
+    final account = _googleSignIn.currentUser;
+    if (account != null) {
+      await _cacheAuthHeaders(account);
     }
   }
 
@@ -50,7 +62,7 @@ class GoogleAuthService {
     await prefs.remove('cached_auth_headers');
   }
 
-  /// Try to get a valid auth client: cached headers → silent sign-in → interactive (web only)
+  /// Try to get a valid auth client: cached headers → silent sign-in → cached token
   static Future<GoogleAuthClient?> _getAuthClient({bool forceRefresh = false}) async {
     final prefs = await SharedPreferences.getInstance();
     final isOwner = prefs.getBool('isOwner') ?? true;
@@ -64,7 +76,7 @@ class GoogleAuthService {
       return GoogleAuthClient(headers);
     }
 
-    // 2. Try silent sign-in (works on mobile, rarely on web)
+    // 2. Try silent sign-in (works on mobile, sometimes on web)
     try {
       account = await _googleSignIn.signInSilently();
       if (account != null) {
@@ -74,7 +86,7 @@ class GoogleAuthService {
       }
     } catch (_) {}
 
-    // 3. On web, try cached headers (survives page refresh until token expires)
+    // 3. On web, use cached headers (survives page refresh until token expires ~1hr)
     if (kIsWeb && !forceRefresh) {
       final cachedJson = prefs.getString('cached_auth_headers');
       if (cachedJson != null) {
@@ -83,20 +95,22 @@ class GoogleAuthService {
       }
     }
 
-    // 4. Last resort: interactive sign-in (popup)
-    if (kIsWeb) {
-      try {
-        account = await _googleSignIn.signIn();
-        if (account != null) {
-          await _cacheAuthHeaders(account);
-          final headers = await account.authHeaders;
-          return GoogleAuthClient(headers);
-        }
-      } catch (e) {
-        print('Interactive re-auth failed: $e');
-      }
-    }
+    // 4. No valid session — caller must trigger interactive sign-in from a user gesture
+    return null;
+  }
 
+  /// Interactive sign-in — MUST be called from a user gesture (button tap) to avoid popup blocking
+  static Future<GoogleAuthClient?> interactiveSignIn() async {
+    try {
+      final account = await _googleSignIn.signIn();
+      if (account != null) {
+        await _cacheAuthHeaders(account);
+        final headers = await account.authHeaders;
+        return GoogleAuthClient(headers);
+      }
+    } catch (e) {
+      print('Interactive sign-in failed: $e');
+    }
     return null;
   }
 
@@ -145,18 +159,17 @@ class GoogleAuthService {
     return drive.DriveApi(client);
   }
 
-  /// Force re-authenticate (clears cache and gets fresh token).
-  /// Call this when an API call returns 401.
+  /// Force re-authenticate (clears cache). Must be called from a user gesture to avoid popup blocking.
   static Future<sheets.SheetsApi?> refreshAndGetSheetsApi() async {
     await _clearCachedHeaders();
-    final client = await _getAuthClient(forceRefresh: true);
+    final client = await interactiveSignIn();
     if (client == null) return null;
     return sheets.SheetsApi(client);
   }
 
   static Future<drive.DriveApi?> refreshAndGetDriveApi() async {
     await _clearCachedHeaders();
-    final client = await _getAuthClient(forceRefresh: true);
+    final client = await interactiveSignIn();
     if (client == null) return null;
     return drive.DriveApi(client);
   }

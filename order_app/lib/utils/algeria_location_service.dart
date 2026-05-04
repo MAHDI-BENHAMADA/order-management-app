@@ -229,6 +229,14 @@ class AlgeriaLocationService {
       }
     }
 
+    // Try finding by Arabic name without prefix (e.g. "تلمسان" instead of "13. تلمسان")
+    for (final entry in _wilayaNameToId.entries) {
+      final keyWithoutPrefix = entry.key.replaceFirst(RegExp(r'^\d+\.\s*'), '').trim();
+      if (keyWithoutPrefix == trimmed || _normalize(keyWithoutPrefix) == normalized) {
+        return entry.value;
+      }
+    }
+
     return null;
   }
 

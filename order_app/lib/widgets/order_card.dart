@@ -104,13 +104,15 @@ class OrderCard extends StatelessWidget {
   final Function(String) onStatusChange;
   final VoidCallback onEdit;
   final VoidCallback? onShip;
-
+  final Widget? totalPriceWidget; // Widget to display total price (base + shipping)
+  
   const OrderCard({
     super.key,
     required this.order,
     required this.onStatusChange,
     required this.onEdit,
     this.onShip,
+    this.totalPriceWidget,
   });
 
   Future<void> _callPhone(BuildContext context) async {
@@ -173,6 +175,39 @@ class OrderCard extends StatelessWidget {
                         '${order.wilaya}  •  ${order.phone}',
                         style: _metaStyle,
                       ),
+                      if (order.product.isNotEmpty || totalPriceWidget != null || order.price.isNotEmpty)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 4),
+                          child: Row(
+                            children: [
+                              if (order.product.isNotEmpty)
+                                Flexible(
+                                  child: Text(
+                                    order.product,
+                                    style: const TextStyle(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w600,
+                                      color: Color(0xFF374151),
+                                    ),
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                              if (order.product.isNotEmpty && (totalPriceWidget != null || int.tryParse(order.price.trim()) != null))
+                                const Text('  •  ', style: TextStyle(color: Colors.grey)),
+                              if (totalPriceWidget != null)
+                                totalPriceWidget!
+                              else if (int.tryParse(order.price.trim()) != null)
+                                Text(
+                                  '${order.price} د.ج',
+                                  style: const TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.bold,
+                                    color: Color(0xFF10B981),
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ),
                       if (hasTracking)
                         Padding(
                           padding: const EdgeInsets.only(top: 4),

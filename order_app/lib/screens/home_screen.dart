@@ -18,6 +18,7 @@ import '../services/column_mapper_service.dart';
 import '../services/staff_sheets_service.dart';
 import '../services/update_service.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:google_sign_in/google_sign_in.dart';
 
 class _ShippingReadiness {
   final Map<String, String> normalizedValues;
@@ -64,6 +65,9 @@ class HomeScreenState extends State<HomeScreen> {
   static const int _stockQuantityDefault = 1;
   /// Reverse of the column map: field key → column letter (e.g. 'status' → 'F')
   Map<String, String> _fieldToColumn = {};
+  bool _needsReauth = false; // shows a banner when token expired
+  StreamSubscription<GoogleSignInAccount?>? _authSubscription;
+  final GoogleSignIn _googleSignIn = GoogleSignIn();
 
 
   Future<List<List<dynamic>>> _sheetsGet(String range) async {
@@ -72,17 +76,17 @@ class HomeScreenState extends State<HomeScreen> {
     
     if (isUserOwner) {
       final api = await GoogleAuthService.getSheetsApi();
-      if (api == null) throw Exception('API Call failed, not logged in.');
+      if (api == null) {
+        if (mounted) setState(() => _needsReauth = true);
+        throw Exception('not logged in');
+      }
       try {
         final response = await api.spreadsheets.values.get(widget.spreadsheetId!, range);
         return (response.values ?? []).map((e) => e as List<dynamic>).toList();
       } catch (e) {
         if (_isAuthError(e)) {
-          print('🔄 Token expired, refreshing...');
-          final retryApi = await GoogleAuthService.refreshAndGetSheetsApi();
-          if (retryApi == null) throw Exception('Re-auth failed.');
-          final response = await retryApi.spreadsheets.values.get(widget.spreadsheetId!, range);
-          return (response.values ?? []).map((e) => e as List<dynamic>).toList();
+          if (mounted) setState(() => _needsReauth = true);
+          throw Exception('not logged in');
         }
         rethrow;
       }
@@ -98,7 +102,10 @@ class HomeScreenState extends State<HomeScreen> {
 
     if (isUserOwner) {
       final api = await GoogleAuthService.getSheetsApi();
-      if (api == null) throw Exception('API Call failed, not logged in.');
+      if (api == null) {
+        if (mounted) setState(() => _needsReauth = true);
+        throw Exception('not logged in');
+      }
       try {
         await api.spreadsheets.values.update(
           sheets.ValueRange(values: values),
@@ -108,14 +115,7 @@ class HomeScreenState extends State<HomeScreen> {
         );
       } catch (e) {
         if (_isAuthError(e)) {
-          final retryApi = await GoogleAuthService.refreshAndGetSheetsApi();
-          if (retryApi == null) throw Exception('Re-auth failed.');
-          await retryApi.spreadsheets.values.update(
-            sheets.ValueRange(values: values),
-            widget.spreadsheetId!,
-            range,
-            valueInputOption: 'USER_ENTERED',
-          );
+          if (mounted) setState(() => _needsReauth = true);
         } else {
           rethrow;
         }
@@ -131,14 +131,15 @@ class HomeScreenState extends State<HomeScreen> {
 
     if (isUserOwner) {
       final api = await GoogleAuthService.getSheetsApi();
-      if (api == null) throw Exception('API Call failed, not logged in.');
+      if (api == null) {
+        if (mounted) setState(() => _needsReauth = true);
+        throw Exception('not logged in');
+      }
       try {
         await api.spreadsheets.values.batchUpdate(request, widget.spreadsheetId!);
       } catch (e) {
         if (_isAuthError(e)) {
-          final retryApi = await GoogleAuthService.refreshAndGetSheetsApi();
-          if (retryApi == null) throw Exception('Re-auth failed.');
-          await retryApi.spreadsheets.values.batchUpdate(request, widget.spreadsheetId!);
+          if (mounted) setState(() => _needsReauth = true);
         } else {
           rethrow;
         }
@@ -151,6 +152,16 @@ class HomeScreenState extends State<HomeScreen> {
   bool _isAuthError(dynamic e) {
     final msg = e.toString().toLowerCase();
     return msg.contains('401') || msg.contains('unauthorized') || msg.contains('invalid credentials');
+  }
+
+  Future<void> _reauth() async {
+    setState(() => _needsReauth = false);
+    final client = await GoogleAuthService.interactiveSignIn();
+    if (client != null) {
+      await fetchData();
+    } else {
+      if (mounted) setState(() => _needsReauth = true);
+    }
   }
 
 
@@ -169,9 +180,22 @@ class HomeScreenState extends State<HomeScreen> {
         });
       });
     });
-    _loadLocationData();
-    fetchData();
+    _loadLocationData().then((_) {
+      if (mounted) fetchData();
+    });
     _checkForUpdates();
+
+    // Listen for FedCM / One Tap sign-in completion
+    _authSubscription = GoogleAuthService.onUserChanged.listen((account) async {
+      if (account != null) {
+        print('👤 Google User changed: ${account.email}');
+        await GoogleAuthService.cacheCurrentUserHeaders();
+        if (_needsReauth && mounted) {
+          setState(() => _needsReauth = false);
+          fetchData();
+        }
+      }
+    });
   }
 
   Future<void> _checkForUpdates() async {
@@ -216,6 +240,9 @@ class HomeScreenState extends State<HomeScreen> {
       final prefs = await SharedPreferences.getInstance();
       final providerId = prefs.getString('selected_provider') ?? '48hr';
       _selectedProvider = ShippingProvider.fromId(providerId);
+      
+      // IMPORTANT: Initialize the API service with the correct provider URL
+      EcoTrackService.setBaseUrl(_selectedProvider.getBaseUrl());
 
       // Load stored defaults for this sheet
       if (widget.spreadsheetId != null && widget.spreadsheetId!.isNotEmpty) {
@@ -225,10 +252,15 @@ class HomeScreenState extends State<HomeScreen> {
       
       isOwner = prefs.getBool('isOwner') ?? false;
 
-      final ecotrackToken = prefs.getString('provider_token_ecotrack') ?? prefs.getString('ecotrack_token');
-      if (ecotrackToken != null && ecotrackToken.isNotEmpty) {
-        EcoTrackService.setApiToken(ecotrackToken);
-        await EcoTrackService.prefetchFees();
+      // Fully initialize the service using the provider factory
+      final tokenKey = _getTokenKeyForProvider(_selectedProvider);
+      final apiToken = prefs.getString(tokenKey) ?? prefs.getString('ecotrack_token');
+      
+      if (apiToken != null && apiToken.isNotEmpty) {
+        ShippingProviderFactory.initializeServiceForProvider(_selectedProvider, apiToken);
+        if (_selectedProvider.integrationType == 'ecotrack') {
+          await EcoTrackService.prefetchFees();
+        }
       }
 
       await AlgeriaLocationService.ensureLoaded();
@@ -260,8 +292,8 @@ class HomeScreenState extends State<HomeScreen> {
         rows = await _sheetsGet('A:ZZ');
       } catch (e) {
         if (e.toString().contains('not logged in')) {
-          _showError('خطأ: لم يتم تسجيل الدخول بصلاحيات كافية.');
-          await _logout();
+          print('Auth issue detected in fetchData, showing banner instead of logging out.');
+          setState(() { isLoading = false; _needsReauth = true; });
           return;
         } else {
           _showError('تعذر جلب البيانات: $e');
@@ -399,35 +431,50 @@ class HomeScreenState extends State<HomeScreen> {
         bool hasChanges = false;
 
         for (final order in processedOrders) {
-          bool orderNeedsUpdate = false;
+          bool productFilled = false;
+          bool priceFilled = false;
           
-          if (order.product.trim().isEmpty && _defaultProduct.isNotEmpty) {
+          // Fill product if empty OR if it contains non-product data (wilaya-style strings)
+          final productIsInvalid = order.product.trim().isEmpty ||
+              (AlgeriaLocationService.getWilayaId(order.product.trim()) != null);
+          if (productIsInvalid && _defaultProduct.isNotEmpty) {
             order.product = _defaultProduct;
-            orderNeedsUpdate = true;
+            productFilled = true;
           }
           
-          if (order.price.trim().isEmpty && _defaultPrice.isNotEmpty) {
-            final wilayaCode = AlgeriaLocationService.getWilayaId(order.wilaya) ?? 16;
-            int shippingFee = 0;
-            try {
-              shippingFee = await EcoTrackService.getShippingFee(wilayaCode);
-            } catch (e) {
-              print('Warning: Could not get shipping fee for auto-fill (Token not set?)');
+          // Fill price if empty OR if it contains non-numeric data (e.g. product name crept in)
+          final priceIsInvalid = order.price.trim().isEmpty ||
+              (int.tryParse(order.price.trim()) == null);
+          if (priceIsInvalid && parsedBasePrice > 0) {
+            // Need a valid wilaya to calculate shipping
+            final wilayaCode = AlgeriaLocationService.getWilayaId(order.wilaya);
+            if (wilayaCode != null) {
+              int shippingFee = 0;
+              try {
+                shippingFee = await EcoTrackService.getShippingFee(wilayaCode);
+              } catch (e) {
+                // No API token — just use base price
+              }
+              final totalPrice = parsedBasePrice + shippingFee;
+              order.price = totalPrice.toString();
+              priceFilled = true;
+            } else {
+              // No valid wilaya — use base price only
+              order.price = parsedBasePrice.toString();
+              priceFilled = true;
             }
-            final totalPrice = parsedBasePrice + shippingFee;
-            order.price = totalPrice.toString();
-            orderNeedsUpdate = true;
           }
           
-          if (orderNeedsUpdate) {
+          // Build batch update for the filled values
+          if (productFilled || priceFilled) {
             hasChanges = true;
-            if (productColLetter != null && order.product == _defaultProduct) {
+            if (productFilled && productColLetter != null) {
               valueRanges.add(sheets.ValueRange(
                 range: '$productColLetter${order.row}:$productColLetter${order.row}',
                 values: [[order.product]],
               ));
             }
-            if (priceColLetter != null && order.price.isNotEmpty) {
+            if (priceFilled && priceColLetter != null) {
               valueRanges.add(sheets.ValueRange(
                 range: '$priceColLetter${order.row}:$priceColLetter${order.row}',
                 values: [[order.price]],
@@ -442,7 +489,7 @@ class HomeScreenState extends State<HomeScreen> {
               data: valueRanges,
               valueInputOption: 'USER_ENTERED',
             ));
-            print('✅ Auto-filled empty orders in Google Sheets');
+            print('✅ Auto-filled ${valueRanges.length} cells in Google Sheets');
           } catch (e) {
             print('Error auto-filling empty orders: $e');
           }
@@ -455,7 +502,6 @@ class HomeScreenState extends State<HomeScreen> {
 
       // --- Step 3: Auto-prompt if metadata is missing ---
       if (_defaultProduct.isEmpty && _defaultPrice.isEmpty && isOwner) {
-        // We use a small delay to ensure the UI has settled
         Future.delayed(const Duration(milliseconds: 500), () {
           if (mounted && _defaultProduct.isEmpty && _defaultPrice.isEmpty) {
             _showProductSettingsDialog(widget.spreadsheetId!, isInitialSetup: true);
@@ -1004,10 +1050,39 @@ class HomeScreenState extends State<HomeScreen> {
 
   @override
   void dispose() {
+    _authSubscription?.cancel();
     _searchDebounce?.cancel();
     _scrollController.dispose();
     _searchController.dispose();
     super.dispose();
+  }
+
+
+
+  /// Widget that displays the total price, fetching shipping fee if needed
+  Widget _buildTotalPriceDisplay(AppOrder order, {TextStyle? style}) {
+    final basePrice = int.tryParse(order.price.trim()) ?? 0;
+    final defaultStyle = style ?? const TextStyle(color: Color(0xFF10B981), fontWeight: FontWeight.bold, fontSize: 12);
+
+    if (basePrice == 0) return Text('-', style: defaultStyle);
+
+    final wilayaCode = AlgeriaLocationService.getWilayaId(order.wilaya);
+    if (wilayaCode == null) return Text('$basePrice د.ج', style: defaultStyle);
+
+    // Check cache first for instant display
+    final cachedFee = EcoTrackService.getShippingFeeSync(wilayaCode);
+    if (cachedFee != null) {
+      return Text('${basePrice + cachedFee} د.ج', style: defaultStyle);
+    }
+
+    // Fallback to async fetch
+    return FutureBuilder<int>(
+      future: EcoTrackService.getShippingFee(wilayaCode),
+      builder: (context, snapshot) {
+        final fee = snapshot.data ?? 0;
+        return Text('${basePrice + fee} د.ج', style: defaultStyle);
+      },
+    );
   }
 
   // Get filtered orders based on current filter
@@ -1507,12 +1582,18 @@ class HomeScreenState extends State<HomeScreen> {
     }
 
     // Use defaults when order has no product/price set
-    final effectiveProduct = order.product.trim().isNotEmpty
+    // Product: use stored value if it's a real product (not wilaya data), else use default
+    final storedProductIsValid = order.product.trim().isNotEmpty &&
+        AlgeriaLocationService.getWilayaId(order.product.trim()) == null;
+    final effectiveProduct = storedProductIsValid
         ? order.product
         : (_defaultProduct.isNotEmpty ? _defaultProduct : '');
-    final effectivePrice = order.price.trim().isNotEmpty
-        ? order.price
-        : (_defaultPrice.isNotEmpty ? _defaultPrice : '');
+
+    // Price in edit dialog = BASE price (not total), so user edits the base
+    // Use _defaultPrice as base; if no default exists, try to use stored price if numeric
+    final effectivePrice = _defaultPrice.isNotEmpty
+        ? _defaultPrice
+        : (int.tryParse(order.price.trim()) != null ? order.price : '');
 
     final values =
         initialValues ??
@@ -1763,38 +1844,91 @@ class HomeScreenState extends State<HomeScreen> {
                               const SizedBox(height: 16),
                             ],
                             if (showField('product') || showField('price'))
-                              Row(
-                                crossAxisAlignment: CrossAxisAlignment.start,
+                              Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
                                 children: [
-                                  if (showField('product'))
-                                    Expanded(
-                                      flex: 2,
-                                      child: (selectedStock == _stockYes && _ecoTrackProducts.isNotEmpty)
-                                          ? _buildProductAutocomplete(
-                                              controller: productController,
-                                              products: _ecoTrackProducts,
-                                              onSelected: (val) {
-                                                productController.text = val;
-                                              },
-                                            )
-                                          : _buildModernTextField(
-                                              controller: productController,
-                                              label: 'المنتج',
-                                              icon: Icons.inventory_2_outlined,
-                                              textDirection: TextDirection.rtl,
-                                            ),
-                                    ),
-                                  if (showField('product') && showField('price'))
-                                    const SizedBox(width: 12),
-                                  if (showField('price'))
-                                    Expanded(
-                                      child: _buildModernTextField(
-                                        controller: priceController,
-                                        label: 'السعر',
-                                        icon: Icons.payments_outlined,
-                                        keyboardType: TextInputType.number,
-                                        textDirection: TextDirection.ltr,
-                                      ),
+                                  Row(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      if (showField('product'))
+                                        Expanded(
+                                          flex: 2,
+                                          child: (selectedStock == _stockYes && _ecoTrackProducts.isNotEmpty)
+                                              ? _buildProductAutocomplete(
+                                                  controller: productController,
+                                                  products: _ecoTrackProducts,
+                                                  onSelected: (val) {
+                                                    productController.text = val;
+                                                  },
+                                                )
+                                              : _buildModernTextField(
+                                                  controller: productController,
+                                                  label: 'المنتج',
+                                                  icon: Icons.inventory_2_outlined,
+                                                  textDirection: TextDirection.rtl,
+                                                ),
+                                        ),
+                                      if (showField('product') && showField('price'))
+                                        const SizedBox(width: 12),
+                                      if (showField('price'))
+                                        Expanded(
+                                          child: _buildModernTextField(
+                                            controller: priceController,
+                                            label: 'السعر الأساسي',
+                                            icon: Icons.payments_outlined,
+                                            keyboardType: TextInputType.number,
+                                            textDirection: TextDirection.ltr,
+                                          ),
+                                        ),
+                                    ],
+                                  ),
+                                  // Live shipping fee preview
+                                  if (selectedWilaya.isNotEmpty)
+                                    FutureBuilder<int>(
+                                      future: () async {
+                                        final code = AlgeriaLocationService.getWilayaId(selectedWilaya);
+                                        if (code == null) return 0;
+                                        try {
+                                          return await EcoTrackService.getShippingFee(code);
+                                        } catch (_) {
+                                          return 0;
+                                        }
+                                      }(),
+                                      builder: (context, snap) {
+                                        final shippingFee = snap.data ?? 0;
+                                        final basePrice = int.tryParse(priceController.text.trim()) ?? 0;
+                                        final total = basePrice + shippingFee;
+                                        if (shippingFee == 0 && basePrice == 0) return const SizedBox.shrink();
+                                        return Container(
+                                          margin: const EdgeInsets.only(top: 10),
+                                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                                          decoration: BoxDecoration(
+                                            color: const Color(0xFF10B981).withValues(alpha: 0.07),
+                                            borderRadius: BorderRadius.circular(12),
+                                            border: Border.all(color: const Color(0xFF10B981).withValues(alpha: 0.2)),
+                                          ),
+                                          child: Row(
+                                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                            children: [
+                                              Column(
+                                                crossAxisAlignment: CrossAxisAlignment.start,
+                                                children: [
+                                                  Text('السعر الأساسي: $basePrice د.ج', style: TextStyle(fontSize: 12, color: Colors.grey[700])),
+                                                  if (shippingFee > 0)
+                                                    Text('توصيل $selectedWilaya: $shippingFee د.ج', style: const TextStyle(fontSize: 12, color: Colors.blueGrey)),
+                                                ],
+                                              ),
+                                              Column(
+                                                crossAxisAlignment: CrossAxisAlignment.end,
+                                                children: [
+                                                  const Text('الإجمالي', style: TextStyle(fontSize: 11, color: Colors.grey)),
+                                                  Text('$total د.ج', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF10B981))),
+                                                ],
+                                              ),
+                                            ],
+                                          ),
+                                        );
+                                      },
                                     ),
                                 ],
                               ),
@@ -1878,15 +2012,26 @@ class HomeScreenState extends State<HomeScreen> {
                                   return;
                                 }
 
+                                final basePrice = int.tryParse(data['price']!.isNotEmpty ? data['price']! : (order.price.isNotEmpty ? order.price : '0')) ?? 0;
+                                final wilayaForSave = data['wilaya']!.isNotEmpty ? data['wilaya']! : order.wilaya;
+                                int shippingFeeForSave = 0;
+                                try {
+                                  final wilayaCode = AlgeriaLocationService.getWilayaId(wilayaForSave);
+                                  if (wilayaCode != null) {
+                                    shippingFeeForSave = await EcoTrackService.getShippingFee(wilayaCode);
+                                  }
+                                } catch (_) {}
+                                final totalPriceForSave = basePrice + shippingFeeForSave;
+
                                 final saved = await _updateOrderFields(
                                   order,
                                   name: data['name']!.isNotEmpty ? data['name']! : order.name,
                                   phone: data['phone']!.isNotEmpty ? data['phone']! : order.phone,
-                                  wilaya: data['wilaya']!.isNotEmpty ? data['wilaya']! : order.wilaya,
+                                  wilaya: wilayaForSave,
                                   commune: data['commune']!.isNotEmpty ? data['commune']! : order.commune,
                                   address: data['address']!.isNotEmpty ? data['address']! : order.address,
                                   product: data['product']!.isNotEmpty ? data['product']! : (order.product.isNotEmpty ? order.product : 'طلب'),
-                                  price: data['price']!.isNotEmpty ? data['price']! : (order.price.isNotEmpty ? order.price : '0'),
+                                  price: totalPriceForSave.toString(),
                                   showSuccessMessage: showSuccessMessage,
                                 );
 
@@ -2794,6 +2939,30 @@ class HomeScreenState extends State<HomeScreen> {
           'لوحة تتبع الطلبات',
           style: TextStyle(fontWeight: FontWeight.bold),
         ),
+        bottom: _needsReauth
+            ? PreferredSize(
+                preferredSize: const Size.fromHeight(48),
+                child: GestureDetector(
+                  onTap: _reauth,
+                  child: Container(
+                    width: double.infinity,
+                    color: const Color(0xFFF59E0B),
+                    padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 16),
+                    child: const Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.lock_clock, color: Colors.white, size: 16),
+                        SizedBox(width: 8),
+                        Text(
+                          'انتهت الجلسة — اضغط هنا لإعادة تسجيل الدخول',
+                          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              )
+            : null,
         actions: [
           if (isOwner && widget.spreadsheetId != null && widget.spreadsheetId!.isNotEmpty)
             IconButton(
@@ -3179,6 +3348,11 @@ class HomeScreenState extends State<HomeScreen> {
                         onShip: _shippingRowsInProgress.contains(order.row)
                             ? null
                             : () => _shipWithSelectedProvider(order),
+                        totalPriceWidget: _buildTotalPriceDisplay(order, style: const TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.bold,
+                          color: Color(0xFF10B981),
+                        )),
                       ),
                     ),
                   );
@@ -3274,8 +3448,16 @@ class HomeScreenState extends State<HomeScreen> {
                               crossAxisAlignment: CrossAxisAlignment.start,
                               mainAxisAlignment: MainAxisAlignment.center,
                               children: [
-                                Text(order.product.isNotEmpty ? order.product : '-', style: const TextStyle(fontWeight: FontWeight.bold)),
-                                Text('${order.price} د.ج', style: const TextStyle(color: Color(0xFF10B981), fontWeight: FontWeight.bold, fontSize: 12)),
+                                Text(
+                                  () {
+                                    final p = order.product.trim();
+                                    if (p.isEmpty) return '-';
+                                    if (AlgeriaLocationService.getWilayaId(p) != null) return _defaultProduct.isNotEmpty ? _defaultProduct : '-';
+                                    return p;
+                                  }(),
+                                  style: const TextStyle(fontWeight: FontWeight.bold),
+                                ),
+                                _buildTotalPriceDisplay(order),
                               ],
                             ),
                           ),
