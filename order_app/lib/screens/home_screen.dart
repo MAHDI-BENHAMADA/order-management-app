@@ -12,6 +12,7 @@ import '../utils/algeria_location_service.dart';
 import '../utils/google_auth_service.dart';
 import '../services/ecotrack_service.dart';
 import '../services/shipping_provider_factory.dart';
+import '../services/token_storage_service.dart';
 import 'staff_management_screen.dart';
 import 'setup_screen.dart';
 import '../services/column_mapper_service.dart';
@@ -253,8 +254,7 @@ class HomeScreenState extends State<HomeScreen> {
       isOwner = prefs.getBool('isOwner') ?? false;
 
       // Fully initialize the service using the provider factory
-      final tokenKey = _getTokenKeyForProvider(_selectedProvider);
-      final apiToken = prefs.getString(tokenKey) ?? prefs.getString('ecotrack_token');
+      final apiToken = await TokenStorageService.getToken(_selectedProvider.id);
       
       if (apiToken != null && apiToken.isNotEmpty) {
         ShippingProviderFactory.initializeServiceForProvider(_selectedProvider, apiToken);
@@ -1564,9 +1564,7 @@ class HomeScreenState extends State<HomeScreen> {
     // Fetch ecotrack products if we are using ecotrack
     if (_selectedProvider.integrationType == 'ecotrack' && _ecoTrackProducts.isEmpty) {
       try {
-        final prefs = await SharedPreferences.getInstance();
-        final tokenKey = _getTokenKeyForProvider(_selectedProvider);
-        final apiToken = prefs.getString(tokenKey) ?? prefs.getString('ecotrack_token');
+        final apiToken = await TokenStorageService.getToken(_selectedProvider.id);
         if (apiToken != null && apiToken.isNotEmpty) {
           ShippingProviderFactory.initializeServiceForProvider(_selectedProvider, apiToken);
           final products = await EcoTrackService.getProductsFromApi();
