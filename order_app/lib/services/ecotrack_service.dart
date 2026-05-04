@@ -368,9 +368,8 @@ class EcoTrackService {
   }
 
   static Future<int> getShippingFee(int wilayaCode) async {
-    if (_cachedFees.containsKey(wilayaCode)) {
-      return _cachedFees[wilayaCode]!;
-    }
+    final cached = getShippingFeeSync(wilayaCode);
+    if (cached != null) return cached;
 
     if (_apiToken == null) {
       throw Exception('EcoTrack API Token not set');
@@ -401,9 +400,11 @@ class EcoTrackService {
         final livraison = data['livraison'] as List?;
         if (livraison != null) {
           for (var fee in livraison) {
-            if (fee['wilaya_id'] == wilayaCode) {
-              // Return the standard tarif (not stop_desk)
-              return int.tryParse(fee['tarif'].toString()) ?? 0;
+            final wId = fee['wilaya_id'];
+            final tarif = int.tryParse(fee['tarif'].toString()) ?? 0;
+            if (wId != null) {
+              _cachedFees[wId as int] = tarif;
+              if (wId == wilayaCode) return tarif;
             }
           }
         }
@@ -418,6 +419,11 @@ class EcoTrackService {
       print('Error getting shipping fees: $e');
       return 500; // Default fallback
     }
+  }
+
+  /// Synchronous fee lookup from cache
+  static int? getShippingFeeSync(int wilayaCode) {
+    return _cachedFees[wilayaCode];
   }
 
   static Future<String?> createParcel(AppOrder order) async {
