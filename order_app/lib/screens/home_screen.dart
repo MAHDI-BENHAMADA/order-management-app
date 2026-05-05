@@ -156,13 +156,35 @@ class HomeScreenState extends State<HomeScreen> {
     return msg.contains('401') || msg.contains('unauthorized') || msg.contains('invalid credentials');
   }
 
-  Future<void> _reauth() async {
-    setState(() => _needsReauth = false);
-    final client = await GoogleAuthService.interactiveSignIn();
-    if (client != null) {
-      await fetchData();
+  /// Called when the user taps the session-expired banner, or when auth silently fails.
+  /// Clears stale cached credentials and sends user back to SetupScreen to re-login.
+  Future<void> _reauth({bool navigate = false}) async {
+    // Clear stale cached tokens so the login screen starts fresh
+    await GoogleAuthService.clearCachedHeaders();
+
+    if (!mounted) return;
+
+    if (navigate) {
+      // Navigate to SetupScreen — the proper UX for a fully expired session
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => const SetupScreen()),
+        (_) => false,
+      );
     } else {
-      if (mounted) setState(() => _needsReauth = true);
+      // User tapped the banner — trigger interactive sign-in popup
+      setState(() => _needsReauth = false);
+      final client = await GoogleAuthService.interactiveSignIn();
+      if (client != null) {
+        await fetchData();
+      } else {
+        // Still couldn't sign in — send to SetupScreen
+        if (mounted) {
+          Navigator.of(context).pushAndRemoveUntil(
+            MaterialPageRoute(builder: (_) => const SetupScreen()),
+            (_) => false,
+          );
+        }
+      }
     }
   }
 
@@ -291,11 +313,22 @@ class HomeScreenState extends State<HomeScreen> {
       // Read the entire sheet dynamically (no hardcoded range)
       List<List<dynamic>> rows;
       try {
-        rows = await _sheetsGet('A:ZZ');
+        rows = await _sheetsGet('A:ZZ').timeout(
+          const Duration(seconds: 30),
+          onTimeout: () {
+            // Clear stale cache on timeout — it means the cached auth header is dead
+            GoogleAuthService.clearCachedHeaders();
+            throw Exception('request timed out');
+          },
+        );
       } catch (e) {
-        if (e.toString().contains('not logged in')) {
-          print('Auth issue detected in fetchData, showing banner instead of logging out.');
-          setState(() { isLoading = false; _needsReauth = true; });
+        if (e.toString().contains('not logged in') || e.toString().contains('request timed out')) {
+          print('Auth issue or timeout in fetchData — navigating to SetupScreen.');
+          setState(() { isLoading = false; });
+          // Navigate away only when the widget is mounted, outside a build phase
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) _reauth(navigate: true);
+          });
           return;
         } else {
           _showError('تعذر جلب البيانات: $e');
@@ -2857,7 +2890,7 @@ class HomeScreenState extends State<HomeScreen> {
             ? PreferredSize(
                 preferredSize: const Size.fromHeight(48),
                 child: GestureDetector(
-                  onTap: _reauth,
+                  onTap: () => _reauth(navigate: true),
                   child: Container(
                     width: double.infinity,
                     color: const Color(0xFFF59E0B),
