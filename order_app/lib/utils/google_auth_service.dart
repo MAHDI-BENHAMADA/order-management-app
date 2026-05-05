@@ -76,23 +76,29 @@ class GoogleAuthService {
       return GoogleAuthClient(headers);
     }
 
-    // 2. Try silent sign-in (works on mobile, sometimes on web)
+    // 2. On web, use cached headers FIRST (survives page refresh)
+    // We do this before signInSilently because signInSilently can hang indefinitely on web 
+    // if third-party cookies are blocked or the user is not fully authenticated.
+    if (kIsWeb && !forceRefresh) {
+      final cachedJson = prefs.getString('cached_auth_headers');
+      if (cachedJson != null) {
+        try {
+          final headers = Map<String, String>.from(jsonDecode(cachedJson));
+          return GoogleAuthClient(headers);
+        } catch (_) {}
+      }
+    }
+
+    // 3. Try silent sign-in (works well on mobile)
     try {
-      account = await _googleSignIn.signInSilently();
+      account = await _googleSignIn.signInSilently().timeout(const Duration(seconds: 5));
       if (account != null) {
         await _cacheAuthHeaders(account);
         final headers = await account.authHeaders;
         return GoogleAuthClient(headers);
       }
-    } catch (_) {}
-
-    // 3. On web, use cached headers (survives page refresh until token expires ~1hr)
-    if (kIsWeb && !forceRefresh) {
-      final cachedJson = prefs.getString('cached_auth_headers');
-      if (cachedJson != null) {
-        final headers = Map<String, String>.from(jsonDecode(cachedJson));
-        return GoogleAuthClient(headers);
-      }
+    } catch (_) {
+      print('⚠️ Silent sign-in failed or timed out');
     }
 
     // 4. No valid session — caller must trigger interactive sign-in from a user gesture
