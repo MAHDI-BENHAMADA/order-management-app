@@ -65,23 +65,21 @@ class GoogleAuthService {
   // Keep private alias for internal use
   static Future<void> _clearCachedHeaders() => clearCachedHeaders();
 
-  /// Try to get a valid auth client: cached headers → silent sign-in → cached token
+  /// Try to get a valid auth client.
+  ///
+  /// On WEB: cached headers always win first — this avoids the hanging
+  /// `account.authHeaders` network call that blocks the browser.
+  ///
+  /// On MOBILE: in-memory session → silent sign-in → cached headers.
   static Future<GoogleAuthClient?> _getAuthClient({bool forceRefresh = false}) async {
     final prefs = await SharedPreferences.getInstance();
     final isOwner = prefs.getBool('isOwner') ?? true;
     if (!isOwner) return null;
 
-    // 1. Try current in-memory session
-    GoogleSignInAccount? account = _googleSignIn.currentUser;
-    if (account != null) {
-      await _cacheAuthHeaders(account);
-      final headers = await account.authHeaders;
-      return GoogleAuthClient(headers);
-    }
-
-    // 2. On web, use cached headers FIRST (survives page refresh)
-    // We do this before signInSilently because signInSilently can hang indefinitely on web 
-    // if third-party cookies are blocked or the user is not fully authenticated.
+    // WEB FAST PATH: Always use cached headers first.
+    // `account.authHeaders` and `signInSilently` both make hidden iframe network
+    // calls on web that browsers silently block after idle, causing infinite hangs.
+    // The cached headers are refreshed every time a real sign-in happens.
     if (kIsWeb && !forceRefresh) {
       final cachedJson = prefs.getString('cached_auth_headers');
       if (cachedJson != null) {
@@ -90,21 +88,44 @@ class GoogleAuthService {
           return GoogleAuthClient(headers);
         } catch (_) {}
       }
+      // No cache on web → no session, caller must show login
+      return null;
     }
 
-    // 3. Try silent sign-in (works well on mobile)
+    // MOBILE PATH: try in-memory session first, with a timeout on authHeaders
+    GoogleSignInAccount? account = _googleSignIn.currentUser;
+    if (account != null) {
+      try {
+        final headers = await account.authHeaders.timeout(const Duration(seconds: 8));
+        await _cacheAuthHeaders(account); // refresh cache while we have it
+        return GoogleAuthClient(headers);
+      } catch (_) {
+        // authHeaders timed out or failed — fall through to silent sign-in
+      }
+    }
+
+    // Mobile: try silent sign-in
     try {
-      account = await _googleSignIn.signInSilently().timeout(const Duration(seconds: 5));
+      account = await _googleSignIn.signInSilently().timeout(const Duration(seconds: 8));
       if (account != null) {
+        final headers = await account.authHeaders.timeout(const Duration(seconds: 8));
         await _cacheAuthHeaders(account);
-        final headers = await account.authHeaders;
         return GoogleAuthClient(headers);
       }
     } catch (_) {
       print('⚠️ Silent sign-in failed or timed out');
     }
 
-    // 4. No valid session — caller must trigger interactive sign-in from a user gesture
+    // Fallback: cached headers (mobile offline scenario)
+    final cachedJson = prefs.getString('cached_auth_headers');
+    if (cachedJson != null) {
+      try {
+        final headers = Map<String, String>.from(jsonDecode(cachedJson));
+        return GoogleAuthClient(headers);
+      } catch (_) {}
+    }
+
+    // No valid session
     return null;
   }
 
@@ -113,6 +134,7 @@ class GoogleAuthService {
     try {
       final account = await _googleSignIn.signIn();
       if (account != null) {
+        // Immediately cache the new headers so the web fast-path uses them
         await _cacheAuthHeaders(account);
         final headers = await account.authHeaders;
         return GoogleAuthClient(headers);
@@ -121,6 +143,25 @@ class GoogleAuthService {
       print('Interactive sign-in failed: $e');
     }
     return null;
+  }
+
+  /// Silently refresh and re-cache auth headers in the background.
+  /// Call this periodically (e.g. every 30 min) to keep the cache fresh on web.
+  /// This runs fire-and-forget — it never blocks the UI.
+  static void refreshCachedHeadersInBackground() {
+    Future.microtask(() async {
+      try {
+        final account = _googleSignIn.currentUser;
+        if (account != null) {
+          final headers = await account.authHeaders.timeout(const Duration(seconds: 10));
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.setString('cached_auth_headers', jsonEncode(headers));
+          print('🔄 Auth headers silently refreshed in background');
+        }
+      } catch (_) {
+        // Ignore — this is fire-and-forget background work
+      }
+    });
   }
 
   static Future<void> signOut() async {
