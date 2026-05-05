@@ -503,9 +503,9 @@ class EcoTrackService {
         }
       }
 
-      // We no longer add the shipping fee here because the app now ensures the sheet holds the total price.
+      // The app ensures the sheet holds the base price. We add the shipping fee here.
       final shippingFee = await getShippingFee(wilayaCode);
-      final totalAmount = parsedPrice; // Price in sheet is already the total price (Base + Shipping)
+      final totalAmount = parsedPrice + shippingFee; // Base Price + Shipping Fee
 
       print(
         'Order Price (Sheet Total): $totalAmount, (Shipping Fee for info: $shippingFee)',

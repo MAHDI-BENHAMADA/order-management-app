@@ -13,6 +13,7 @@ import '../utils/google_auth_service.dart';
 import '../services/ecotrack_service.dart';
 import '../services/shipping_provider_factory.dart';
 import '../services/token_storage_service.dart';
+import '../services/sheet_settings_service.dart';
 import 'staff_management_screen.dart';
 import 'setup_screen.dart';
 import '../services/column_mapper_service.dart';
@@ -247,8 +248,9 @@ class HomeScreenState extends State<HomeScreen> {
 
       // Load stored defaults for this sheet
       if (widget.spreadsheetId != null && widget.spreadsheetId!.isNotEmpty) {
-        _defaultPrice = prefs.getString('default_price_${widget.spreadsheetId}') ?? '';
-        _defaultProduct = prefs.getString('default_product_${widget.spreadsheetId}') ?? '';
+        final settings = await SheetSettingsService.getSettings(widget.spreadsheetId!);
+        _defaultProduct = settings['product'] ?? '';
+        _defaultPrice = settings['price'] ?? '';
       }
       
       isOwner = prefs.getBool('isOwner') ?? false;
@@ -374,27 +376,7 @@ class HomeScreenState extends State<HomeScreen> {
 
       setState(() { _fieldToColumn = newFieldToColumn; });
       
-      // --- Step 1.5: Look for App Metadata (Product Name/Price) ---
-      final prefs = await SharedPreferences.getInstance();
-      int prodNameColIdx = headerRow.indexOf('__PRODUCT_NAME__');
-      int prodPriceColIdx = headerRow.indexOf('__PRODUCT_PRICE__');
-
-      if (prodNameColIdx != -1 && rows.length > 1) {
-        final val = rows[1][prodNameColIdx].toString().trim();
-        if (val.isNotEmpty) {
-          _defaultProduct = val;
-          await prefs.setString('default_product_${widget.spreadsheetId}', val);
-        }
-      }
-      if (prodPriceColIdx != -1 && rows.length > 1) {
-        final val = rows[1][prodPriceColIdx].toString().trim();
-        if (val.isNotEmpty) {
-          _defaultPrice = val;
-          await prefs.setString('default_price_${widget.spreadsheetId}', val);
-        }
-      }
-
-
+      // --- Step 1.5: (Legacy App Metadata logic removed, now using SheetSettingsService) ---
       // --- Step 2: Parse each data row using the mapping ---
       final List<dynamic> parsedData = [];
       for (int i = 1; i < rows.length; i++) {
@@ -446,23 +428,8 @@ class HomeScreenState extends State<HomeScreen> {
           final priceIsInvalid = order.price.trim().isEmpty ||
               (int.tryParse(order.price.trim()) == null);
           if (priceIsInvalid && parsedBasePrice > 0) {
-            // Need a valid wilaya to calculate shipping
-            final wilayaCode = AlgeriaLocationService.getWilayaId(order.wilaya);
-            if (wilayaCode != null) {
-              int shippingFee = 0;
-              try {
-                shippingFee = await EcoTrackService.getShippingFee(wilayaCode);
-              } catch (e) {
-                // No API token — just use base price
-              }
-              final totalPrice = parsedBasePrice + shippingFee;
-              order.price = totalPrice.toString();
-              priceFilled = true;
-            } else {
-              // No valid wilaya — use base price only
-              order.price = parsedBasePrice.toString();
-              priceFilled = true;
-            }
+            order.price = parsedBasePrice.toString();
+            priceFilled = true;
           }
           
           // Build batch update for the filled values
@@ -816,9 +783,9 @@ class HomeScreenState extends State<HomeScreen> {
 
   /// Shows a dialog to set or change the default product name & price for the current sheet.
   Future<void> _showProductSettingsDialog(String spreadsheetId, {bool isInitialSetup = false}) async {
-    final prefs = await SharedPreferences.getInstance();
-    final currentPrice = prefs.getString('default_price_$spreadsheetId') ?? '';
-    final currentProduct = prefs.getString('default_product_$spreadsheetId') ?? '';
+    final settings = await SheetSettingsService.getSettings(spreadsheetId);
+    final currentPrice = settings['price'] ?? '';
+    final currentProduct = settings['product'] ?? '';
     final priceController = TextEditingController(text: currentPrice);
     final productController = TextEditingController(text: currentProduct);
 
@@ -936,8 +903,10 @@ class HomeScreenState extends State<HomeScreen> {
                       onPressed: () async {
                         final price = priceController.text.trim();
                         final product = productController.text.trim();
-                        await prefs.setString('default_price_$spreadsheetId', price);
-                        await prefs.setString('default_product_$spreadsheetId', product);
+                        
+                        // Save to Firestore and local storage
+                        await SheetSettingsService.saveSettings(spreadsheetId, product, price);
+                        
                         if (mounted) {
                           setState(() {
                             _defaultPrice = price;
@@ -945,12 +914,6 @@ class HomeScreenState extends State<HomeScreen> {
                           });
                         }
                         if (dialogContext.mounted) Navigator.pop(dialogContext);
-
-                        // Also save to the Google Sheet for persistence across users/devices
-                        if (isOwner) {
-                          _saveMetadataToSheet(product, price);
-                        }
-                        
                         // Re-fetch to apply the new defaults to any empty rows
                         fetchData();
                       },
@@ -983,44 +946,6 @@ class HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  /// Saves product metadata to the Google Sheet in dedicated hidden columns.
-  Future<void> _saveMetadataToSheet(String product, String price) async {
-    try {
-      // Refresh current headers
-      final List<List<dynamic>> rows = await _sheetsGet('1:1');
-      if (rows.isEmpty) return;
-      final headerRow = rows[0].map((h) => h.toString()).toList();
-
-      int prodNameColIdx = headerRow.indexOf('__PRODUCT_NAME__');
-      int prodPriceColIdx = headerRow.indexOf('__PRODUCT_PRICE__');
-
-      String nameColLetter;
-      if (prodNameColIdx == -1) {
-        nameColLetter = _colLetter(headerRow.length);
-        await _sheetsUpdate('${nameColLetter}1', [['__PRODUCT_NAME__']]);
-        // Update local headerRow representation to prevent overlap if price is also new
-        headerRow.add('__PRODUCT_NAME__');
-      } else {
-        nameColLetter = _colLetter(prodNameColIdx);
-      }
-
-      String priceColLetter;
-      if (prodPriceColIdx == -1) {
-        priceColLetter = _colLetter(headerRow.length);
-        await _sheetsUpdate('${priceColLetter}1', [['__PRODUCT_PRICE__']]);
-      } else {
-        priceColLetter = _colLetter(prodPriceColIdx);
-      }
-
-      // Write values to the second row (first data row)
-      await _sheetsUpdate('${nameColLetter}2', [[product]]);
-      await _sheetsUpdate('${priceColLetter}2', [[price]]);
-      
-      print('✅ Metadata saved to sheet: $product, $price');
-    } catch (e) {
-      print('❌ Failed to save metadata to sheet: $e');
-    }
-  }
 
   void _showError(String message) {
     if (!mounted) return;
@@ -1587,11 +1512,10 @@ class HomeScreenState extends State<HomeScreen> {
         ? order.product
         : (_defaultProduct.isNotEmpty ? _defaultProduct : '');
 
-    // Price in edit dialog = BASE price (not total), so user edits the base
-    // Use _defaultPrice as base; if no default exists, try to use stored price if numeric
-    final effectivePrice = _defaultPrice.isNotEmpty
-        ? _defaultPrice
-        : (int.tryParse(order.price.trim()) != null ? order.price : '');
+    final storedPriceIsValid = int.tryParse(order.price.trim()) != null;
+    final effectivePrice = storedPriceIsValid
+        ? order.price
+        : (_defaultPrice.isNotEmpty ? _defaultPrice : '');
 
     final values =
         initialValues ??
@@ -2012,14 +1936,6 @@ class HomeScreenState extends State<HomeScreen> {
 
                                 final basePrice = int.tryParse(data['price']!.isNotEmpty ? data['price']! : (order.price.isNotEmpty ? order.price : '0')) ?? 0;
                                 final wilayaForSave = data['wilaya']!.isNotEmpty ? data['wilaya']! : order.wilaya;
-                                int shippingFeeForSave = 0;
-                                try {
-                                  final wilayaCode = AlgeriaLocationService.getWilayaId(wilayaForSave);
-                                  if (wilayaCode != null) {
-                                    shippingFeeForSave = await EcoTrackService.getShippingFee(wilayaCode);
-                                  }
-                                } catch (_) {}
-                                final totalPriceForSave = basePrice + shippingFeeForSave;
 
                                 final saved = await _updateOrderFields(
                                   order,
@@ -2029,7 +1945,7 @@ class HomeScreenState extends State<HomeScreen> {
                                   commune: data['commune']!.isNotEmpty ? data['commune']! : order.commune,
                                   address: data['address']!.isNotEmpty ? data['address']! : order.address,
                                   product: data['product']!.isNotEmpty ? data['product']! : (order.product.isNotEmpty ? order.product : 'طلب'),
-                                  price: totalPriceForSave.toString(),
+                                  price: basePrice.toString(),
                                   showSuccessMessage: showSuccessMessage,
                                 );
 
