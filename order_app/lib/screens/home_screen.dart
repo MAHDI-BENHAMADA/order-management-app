@@ -61,6 +61,7 @@ class HomeScreenState extends State<HomeScreen> {
   String _defaultProduct = '';
   bool isOwner = false;
   bool _logoutInProgress = false;
+  bool _setupDismissed = false;
   static const int _stopDeskDomicile = 0;
   static const int _stopDeskPointRelais = 1;
   static const int _stockNo = 0;
@@ -279,8 +280,9 @@ class HomeScreenState extends State<HomeScreen> {
       // Load stored defaults for this sheet
       if (widget.spreadsheetId != null && widget.spreadsheetId!.isNotEmpty) {
         final settings = await SheetSettingsService.getSettings(widget.spreadsheetId!);
-        _defaultProduct = settings['product'] ?? '';
-        _defaultPrice = settings['price'] ?? '';
+        _defaultProduct = settings['product'] as String? ?? '';
+        _defaultPrice = settings['price'] as String? ?? '';
+        _setupDismissed = settings['dismissed'] as bool? ?? false;
       }
       
       isOwner = prefs.getBool('isOwner') ?? false;
@@ -470,10 +472,10 @@ class HomeScreenState extends State<HomeScreen> {
         allOrders = processedOrders;
       });
 
-      // --- Step 3: Auto-prompt if metadata is missing ---
-      if (_defaultProduct.isEmpty && _defaultPrice.isEmpty && isOwner) {
+      // --- Step 3: Auto-prompt if metadata is missing and user has never dismissed ---
+      if (_defaultProduct.isEmpty && _defaultPrice.isEmpty && !_setupDismissed && isOwner) {
         Future.delayed(const Duration(milliseconds: 500), () {
-          if (mounted && _defaultProduct.isEmpty && _defaultPrice.isEmpty) {
+          if (mounted && _defaultProduct.isEmpty && _defaultPrice.isEmpty && !_setupDismissed) {
             _showProductSettingsDialog(widget.spreadsheetId!, isInitialSetup: true);
           }
         });
@@ -938,7 +940,15 @@ class HomeScreenState extends State<HomeScreen> {
               if (isInitialSetup) ...[
                 const SizedBox(height: 12),
                 TextButton(
-                  onPressed: () => Navigator.pop(dialogContext),
+                  onPressed: () async {
+                    // Persist dismissal so the dialog never shows again automatically
+                    await SheetSettingsService.saveSettings(
+                      spreadsheetId, '', '',
+                      dismissed: true,
+                    );
+                    if (mounted) setState(() => _setupDismissed = true);
+                    if (dialogContext.mounted) Navigator.pop(dialogContext);
+                  },
                   child: Text('تخطي', style: TextStyle(color: Colors.grey[500])),
                 ),
               ],

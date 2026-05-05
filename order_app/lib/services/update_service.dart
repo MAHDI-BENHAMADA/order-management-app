@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:flutter/foundation.dart' show defaultTargetPlatform, kIsWeb, TargetPlatform;
 import 'package:http/http.dart' as http;
 import 'package:package_info_plus/package_info_plus.dart';
 
@@ -8,6 +9,11 @@ class UpdateService {
   /// Returns the latest version string (e.g., '1.1.0') if an update is available,
   /// otherwise returns null.
   static Future<String?> checkForUpdate() async {
+    // Update prompts are only relevant for the Android app.
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) {
+      return null;
+    }
+
     try {
       final response = await http.get(Uri.parse(_githubApiUrl));
 
