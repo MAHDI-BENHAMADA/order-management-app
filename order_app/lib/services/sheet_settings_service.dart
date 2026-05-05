@@ -43,7 +43,7 @@ class SheetSettingsService {
 
     try {
       // 1. Fetch from Firestore
-      final doc = await _firestore.collection(_collection).doc(_document).get();
+      final doc = await _firestore.collection(_collection).doc(_document).get().timeout(const Duration(seconds: 5));
       if (doc.exists) {
         final data = doc.data();
         if (data != null) {

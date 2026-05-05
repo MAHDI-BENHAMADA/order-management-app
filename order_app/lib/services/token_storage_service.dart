@@ -35,7 +35,7 @@ class TokenStorageService {
 
     try {
       // 1. Try fetching from Firestore
-      final doc = await _firestore.collection(_collection).doc(_document).get();
+      final doc = await _firestore.collection(_collection).doc(_document).get().timeout(const Duration(seconds: 5));
       if (doc.exists) {
         token = doc.data()?[tokenKey] as String?;
         if (token != null && token.isNotEmpty) {
