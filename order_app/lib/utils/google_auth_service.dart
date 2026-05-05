@@ -56,11 +56,14 @@ class GoogleAuthService {
     }
   }
 
-  /// Clear cached headers (called when a 401 is detected)
-  static Future<void> _clearCachedHeaders() async {
+  /// Clear cached headers (called when a 401 is detected or session expires)
+  static Future<void> clearCachedHeaders() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('cached_auth_headers');
   }
+
+  // Keep private alias for internal use
+  static Future<void> _clearCachedHeaders() => clearCachedHeaders();
 
   /// Try to get a valid auth client: cached headers → silent sign-in → cached token
   static Future<GoogleAuthClient?> _getAuthClient({bool forceRefresh = false}) async {
