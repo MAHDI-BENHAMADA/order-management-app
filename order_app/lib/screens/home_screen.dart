@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:googleapis/sheets/v4.dart' as sheets;
 import 'package:googleapis/drive/v3.dart' as drive;
@@ -3344,7 +3345,29 @@ class HomeScreenState extends State<HomeScreen> {
                               mainAxisAlignment: MainAxisAlignment.center,
                               children: [
                                 Text(order.name.isNotEmpty ? order.name : 'بدون اسم', style: const TextStyle(fontWeight: FontWeight.bold)),
-                                Text(order.phone.isNotEmpty ? order.phone : 'بدون هاتف', style: TextStyle(color: Colors.grey[600], fontSize: 12), textDirection: TextDirection.ltr),
+                                InkWell(
+                                  onTap: () {
+                                    if (order.phone.isNotEmpty) {
+                                      Clipboard.setData(ClipboardData(text: order.phone));
+                                      ScaffoldMessenger.of(context).showSnackBar(
+                                        const SnackBar(
+                                          content: Text('تم نسخ رقم الهاتف بنجاح!', textAlign: TextAlign.right),
+                                          duration: Duration(seconds: 1),
+                                        ),
+                                      );
+                                    }
+                                  },
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Text(order.phone.isNotEmpty ? order.phone : 'بدون هاتف', style: TextStyle(color: Colors.grey[600], fontSize: 12), textDirection: TextDirection.ltr),
+                                      if (order.phone.isNotEmpty) ...[
+                                        const SizedBox(width: 4),
+                                        Icon(Icons.copy, size: 12, color: Colors.grey[500]),
+                                      ]
+                                    ],
+                                  ),
+                                ),
                               ],
                             ),
                           ),

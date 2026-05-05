@@ -72,26 +72,27 @@ class StatusSelector extends StatelessWidget {
             .toList();
       },
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
         decoration: BoxDecoration(
           color: active.color.withValues(alpha: 0.1),
-          borderRadius: BorderRadius.circular(10),
+          borderRadius: BorderRadius.circular(8),
           border: Border.all(color: active.color.withValues(alpha: 0.35)),
         ),
         child: Row(
+          mainAxisSize: MainAxisSize.min, // Wrap content tightly
           children: [
-            Icon(active.icon, color: active.color, size: 18),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                active.label,
-                style: TextStyle(
-                  color: active.color,
-                  fontWeight: FontWeight.w700,
-                ),
+            Icon(active.icon, color: active.color, size: 16),
+            const SizedBox(width: 6),
+            Text(
+              active.label,
+              style: TextStyle(
+                color: active.color,
+                fontWeight: FontWeight.w700,
+                fontSize: 13,
               ),
             ),
-            const Icon(Icons.keyboard_arrow_down, color: Colors.black54),
+            const SizedBox(width: 4),
+            const Icon(Icons.keyboard_arrow_down, color: Colors.black54, size: 16),
           ],
         ),
       ),
@@ -149,120 +150,165 @@ class OrderCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final hasTracking =
-        order.trackingNumber != null && order.trackingNumber!.isNotEmpty;
+    final hasTracking = order.trackingNumber != null && order.trackingNumber!.isNotEmpty;
 
     return Card(
-      margin: EdgeInsets.zero,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      margin: const EdgeInsets.only(bottom: 8),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
       elevation: 1,
       shadowColor: Colors.black12,
       child: Padding(
-        padding: const EdgeInsets.all(12),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // Top Row: Name and Status
             Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(order.name, style: _nameStyle),
-                      const SizedBox(height: 4),
-                      Text(
-                        '${order.wilaya}  •  ${order.phone}',
-                        style: _metaStyle,
-                      ),
-                      if (order.product.isNotEmpty || totalPriceWidget != null || order.price.isNotEmpty)
-                        Padding(
-                          padding: const EdgeInsets.only(top: 4),
-                          child: Row(
-                            children: [
-                              if (order.product.isNotEmpty)
-                                Flexible(
-                                  child: Text(
-                                    order.product,
-                                    style: const TextStyle(
-                                      fontSize: 13,
-                                      fontWeight: FontWeight.w600,
-                                      color: Color(0xFF374151),
-                                    ),
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                ),
-                              if (order.product.isNotEmpty && (totalPriceWidget != null || int.tryParse(order.price.trim()) != null))
-                                const Text('  •  ', style: TextStyle(color: Colors.grey)),
-                              if (totalPriceWidget != null)
-                                totalPriceWidget!
-                              else if (int.tryParse(order.price.trim()) != null)
-                                Text(
-                                  '${order.price} د.ج',
-                                  style: const TextStyle(
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.bold,
-                                    color: Color(0xFF10B981),
-                                  ),
-                                ),
-                            ],
-                          ),
-                        ),
-                      if (hasTracking)
-                        Padding(
-                          padding: const EdgeInsets.only(top: 4),
-                          child: Text(
-                            'تتبع: ${order.trackingNumber!}',
-                            style: const TextStyle(
-                              fontSize: 12,
-                              color: Colors.black87,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        ),
-                    ],
+                  child: Text(
+                    order.name,
+                    style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: Colors.black87),
+                    overflow: TextOverflow.ellipsis,
                   ),
                 ),
-                IconButton(
-                  onPressed: onEdit,
-                  icon: const Icon(Icons.edit_outlined, color: Colors.blueGrey),
-                  tooltip: 'تعديل',
-                ),
-                IconButton(
-                  onPressed: () => _callPhone(context),
-                  icon: const Icon(Icons.phone, color: Color(0xFF10B981)),
-                  tooltip: 'اتصال ونسخ',
+                const SizedBox(width: 8),
+                StatusSelector(
+                  currentStatus: order.status,
+                  onSelected: onStatusChange,
                 ),
               ],
             ),
-            const SizedBox(height: 6),
+            const SizedBox(height: 4),
+
+            // Middle Row: Phone & Wilaya
+            Row(
+              children: [
+                const Icon(Icons.phone_android, size: 13, color: Colors.black54),
+                const SizedBox(width: 4),
+                Text(
+                  order.phone,
+                  style: const TextStyle(fontSize: 13, color: Colors.black87, fontWeight: FontWeight.w500),
+                ),
+                const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 6),
+                  child: Text('•', style: TextStyle(color: Colors.black38)),
+                ),
+                const Icon(Icons.location_on_outlined, size: 13, color: Colors.black54),
+                const SizedBox(width: 4),
+                Expanded(
+                  child: Text(
+                    order.wilaya,
+                    style: const TextStyle(fontSize: 13, color: Colors.black87),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+
+            // Middle Row 2: Product & Price
+            if (order.product.isNotEmpty || totalPriceWidget != null || order.price.isNotEmpty)
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  const Icon(Icons.shopping_bag_outlined, size: 13, color: Colors.black54),
+                  const SizedBox(width: 4),
+                  if (order.product.isNotEmpty)
+                    Flexible(
+                      child: Text(
+                        order.product,
+                        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF374151)),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  if (order.product.isNotEmpty && (totalPriceWidget != null || int.tryParse(order.price.trim()) != null))
+                    const Padding(
+                      padding: EdgeInsets.symmetric(horizontal: 6),
+                      child: Text('•', style: TextStyle(color: Colors.black38)),
+                    ),
+                  if (totalPriceWidget != null)
+                    totalPriceWidget!
+                  else if (int.tryParse(order.price.trim()) != null)
+                    Text(
+                      '${order.price} د.ج',
+                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Color(0xFF10B981)),
+                    ),
+                ],
+              ),
+            
+            if (hasTracking)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Row(
+                  children: [
+                    const Icon(Icons.local_shipping_outlined, size: 13, color: Colors.black54),
+                    const SizedBox(width: 4),
+                    Text(
+                      'تتبع: ${order.trackingNumber!}',
+                      style: const TextStyle(fontSize: 12, color: Colors.black87, fontWeight: FontWeight.w600),
+                    ),
+                  ],
+                ),
+              ),
+
+            const SizedBox(height: 8),
+            const Divider(height: 1, thickness: 0.5),
+            const SizedBox(height: 8),
+
+            // Bottom Row: Actions
             Row(
               children: [
                 Expanded(
-                  child: StatusSelector(
-                    currentStatus: order.status,
-                    onSelected: onStatusChange,
+                  child: Row(
+                    children: [
+                      _buildActionBtn(context, Icons.phone, 'اتصال', const Color(0xFF10B981), () => _callPhone(context)),
+                      const SizedBox(width: 8),
+                      _buildActionBtn(context, Icons.edit_outlined, 'تعديل', Colors.blueGrey, onEdit),
+                    ],
                   ),
                 ),
                 if (order.status == 'confirm' && onShip != null)
-                  Padding(
-                    padding: const EdgeInsets.only(left: 8),
-                    child: FilledButton.icon(
-                      onPressed: onShip,
-                      icon: const Icon(Icons.local_shipping, size: 16),
-                      label: const Text('شحن'),
-                      style: FilledButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 12,
-                        ),
-                        backgroundColor: const Color(0xFF0066CC),
-                        minimumSize: const Size(0, 40),
-                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                      ),
+                  FilledButton.icon(
+                    onPressed: onShip,
+                    icon: const Icon(Icons.local_shipping, size: 14),
+                    label: const Text('شحن', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
+                    style: FilledButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
+                      backgroundColor: const Color(0xFF0066CC),
+                      minimumSize: const Size(0, 36),
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                     ),
                   ),
               ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildActionBtn(BuildContext context, IconData icon, String label, Color color, VoidCallback onTap) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(6),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.08),
+          borderRadius: BorderRadius.circular(6),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 15, color: color),
+            const SizedBox(width: 4),
+            Text(
+              label,
+              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: color),
             ),
           ],
         ),
