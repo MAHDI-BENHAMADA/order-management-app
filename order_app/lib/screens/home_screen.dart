@@ -443,62 +443,24 @@ class HomeScreenState extends State<HomeScreen> {
       await _applyStockSelections(processedOrders);
       await _applyQuantitySelections(processedOrders);
 
-      // --- Step: Auto-fill empty default products and calculate shipping fees ---
+      // --- Step: Apply defaults in-memory only (never write back to the sheet) ---
+      // The sheet stays clean. Defaults come from Firestore (SheetSettingsService).
       if (_defaultProduct.isNotEmpty || _defaultPrice.isNotEmpty) {
         final parsedBasePrice = int.tryParse(_defaultPrice) ?? 0;
-        final valueRanges = <sheets.ValueRange>[];
-        final productColLetter = newFieldToColumn['product'];
-        final priceColLetter = newFieldToColumn['price'];
-        
-        bool hasChanges = false;
 
         for (final order in processedOrders) {
-          bool productFilled = false;
-          bool priceFilled = false;
-          
-          // Fill product if empty OR if it contains non-product data (wilaya-style strings)
+          // Apply default product in memory if the order's product is empty or looks like a wilaya
           final productIsInvalid = order.product.trim().isEmpty ||
               (AlgeriaLocationService.getWilayaId(order.product.trim()) != null);
           if (productIsInvalid && _defaultProduct.isNotEmpty) {
             order.product = _defaultProduct;
-            productFilled = true;
           }
-          
-          // Fill price if empty OR if it contains non-numeric data (e.g. product name crept in)
+
+          // Apply default base price in memory if the order has no valid numeric price
           final priceIsInvalid = order.price.trim().isEmpty ||
               (int.tryParse(order.price.trim()) == null);
           if (priceIsInvalid && parsedBasePrice > 0) {
             order.price = parsedBasePrice.toString();
-            priceFilled = true;
-          }
-          
-          // Build batch update for the filled values
-          if (productFilled || priceFilled) {
-            hasChanges = true;
-            if (productFilled && productColLetter != null) {
-              valueRanges.add(sheets.ValueRange(
-                range: '$productColLetter${order.row}:$productColLetter${order.row}',
-                values: [[order.product]],
-              ));
-            }
-            if (priceFilled && priceColLetter != null) {
-              valueRanges.add(sheets.ValueRange(
-                range: '$priceColLetter${order.row}:$priceColLetter${order.row}',
-                values: [[order.price]],
-              ));
-            }
-          }
-        }
-        
-        if (hasChanges && valueRanges.isNotEmpty) {
-          try {
-            await _sheetsBatchUpdate(sheets.BatchUpdateValuesRequest(
-              data: valueRanges,
-              valueInputOption: 'USER_ENTERED',
-            ));
-            print('✅ Auto-filled ${valueRanges.length} cells in Google Sheets');
-          } catch (e) {
-            print('Error auto-filling empty orders: $e');
           }
         }
       }
