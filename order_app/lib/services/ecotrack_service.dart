@@ -557,22 +557,26 @@ class EcoTrackService {
       print('EcoTrack Response Body: ${response.body}');
 
       if (response.statusCode == 200 || response.statusCode == 201) {
+        Map<String, dynamic> data;
         try {
-          final data = jsonDecode(response.body);
-
-          // Check for success field
-          if (data['success'] == true) {
-            // Get the reference/tracking number from the response
-            return data['reference'] ??
-                data['data']?['reference'] ??
-                data['tracking_number'] ??
-                data['order_id'];
-          } else {
-            throw Exception('EcoTrack: ${data['message'] ?? 'Unknown error'}');
-          }
+          data = jsonDecode(response.body);
         } catch (e) {
           print('Parse error: $e');
           return response.body;
+        }
+
+        // Check for success field
+        if (data['success'] == true || !data.containsKey('success')) {
+          // Get the reference/tracking number from the response
+          final tracking = data['reference'] ??
+              data['data']?['reference'] ??
+              data['tracking_number'] ??
+              data['order_id'];
+              
+          if (tracking != null) return tracking.toString();
+          return response.body;
+        } else {
+          throw Exception('${data['message'] ?? 'Unknown error'}');
         }
       } else if (response.statusCode == 403) {
         throw Exception('EcoTrack: Forbidden - Invalid or expired token (403)');
