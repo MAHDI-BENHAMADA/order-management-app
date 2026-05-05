@@ -70,6 +70,7 @@ class HomeScreenState extends State<HomeScreen> {
   bool _needsReauth = false; // shows a banner when token expired
   StreamSubscription<GoogleSignInAccount?>? _authSubscription;
   final GoogleSignIn _googleSignIn = GoogleSignIn();
+  Timer? _tokenRefreshTimer; // silently refreshes cached auth headers on web
 
 
   Future<List<List<dynamic>>> _sheetsGet(String range) async {
@@ -219,6 +220,12 @@ class HomeScreenState extends State<HomeScreen> {
           fetchData();
         }
       }
+    });
+
+    // Proactively refresh cached Google auth headers every 30 minutes on web.
+    // This keeps the cache fresh so the web fast-path never hits an expired token.
+    _tokenRefreshTimer = Timer.periodic(const Duration(minutes: 30), (_) {
+      GoogleAuthService.refreshCachedHeadersInBackground();
     });
   }
 
@@ -1010,6 +1017,7 @@ class HomeScreenState extends State<HomeScreen> {
   void dispose() {
     _authSubscription?.cancel();
     _searchDebounce?.cancel();
+    _tokenRefreshTimer?.cancel();
     _scrollController.dispose();
     _searchController.dispose();
     super.dispose();
